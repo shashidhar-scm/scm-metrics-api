@@ -1,0 +1,7 @@
+{
+  "/api": {
+    "target": "https://scm-metrics-api.citypost.us",
+    "secure": false,
+    "changeOrigin": true
+  }
+}

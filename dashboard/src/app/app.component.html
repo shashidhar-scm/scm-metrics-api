@@ -1,0 +1,61 @@
+<div class="container">
+  <div class="header">
+    <div>
+      <div style="font-size: 20px; font-weight: 800;">Metrics Dashboard</div>
+      <div style="color: #98a4c7; font-size: 12px;">Summary + Series Visualizations</div>
+    </div>
+
+    <div style="display:flex; gap: 10px; align-items:center;">
+      <div>
+        <label style="margin-right: 8px; color: #a9b4d0; font-size: 12px;">Range</label>
+        <select [value]="selectedRange" (change)="onRangeChange(($any($event.target)).value)">
+          <option *ngFor="let r of ranges" [value]="r.value">{{ r.label }}</option>
+        </select>
+      </div>
+
+      <div>
+        <label style="margin-right: 8px; color: #a9b4d0; font-size: 12px;">Server</label>
+        <select [value]="selectedServer" (change)="onServerChange(($any($event.target)).value)">
+          <option *ngFor="let s of servers" [value]="s">{{ s }}</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>CPU</h3>
+      <div class="value">{{ latest ? (latest.cpu | number:'1.0-2') : '-' }}%</div>
+      <div class="sub">Latest summary value</div>
+    </div>
+
+    <div class="card">
+      <h3>Memory</h3>
+      <div class="value">{{ latest ? (latest.memory | number:'1.0-2') : '-' }}%</div>
+      <div class="sub">{{ memoryUsedTotal() }}</div>
+    </div>
+
+    <div class="card">
+      <h3>Disk</h3>
+      <div class="value">{{ latest ? (latest.disk | number:'1.0-2') : '-' }}%</div>
+      <div class="sub">{{ diskUsedTotal() }}</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h3>Load (1m)</h3>
+      <canvas id="loadChart"></canvas>
+    </div>
+
+    <div class="card">
+      <h3>Disk Used % (Aggregated)</h3>
+      <canvas id="diskChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top: 12px;">
+    <h3>Disk Used (Bytes, Aggregated)</h3>
+    <canvas id="diskUsedChart"></canvas>
+  </div>
+</div>
