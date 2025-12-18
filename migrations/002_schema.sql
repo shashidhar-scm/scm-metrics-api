@@ -10,7 +10,12 @@ CREATE TABLE IF NOT EXISTS server_metrics (
   disk DOUBLE PRECISION NOT NULL DEFAULT 0,
   disk_total_bytes BIGINT NOT NULL DEFAULT 0,
   disk_used_bytes BIGINT NOT NULL DEFAULT 0,
-  disk_free_bytes BIGINT NOT NULL DEFAULT 0
+  disk_free_bytes BIGINT NOT NULL DEFAULT 0,
+  uptime BIGINT NOT NULL DEFAULT 0,
+  city TEXT,
+  city_name TEXT,
+  region TEXT,
+  region_name TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_server_metrics_server_id_time_desc

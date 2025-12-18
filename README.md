@@ -149,6 +149,23 @@ To avoid `exec format error` on GKE, build for the correct platform:
 docker buildx build --platform linux/amd64 -t <repo>/scm-metrics-api:<tag> --push .
 ```
 
+Verify the cluster nodes are the expected architecture and that your Deployment is using the image/tag you just pushed:
+
+```bash
+kubectl get nodes -o wide
+kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.nodeInfo.architecture}{"\n"}{end}'
+
+kubectl get deploy scm-metrics-api -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+```
+
+After pushing a corrected image, restart the Deployment and watch the rollout/logs:
+
+```bash
+kubectl rollout restart deploy/scm-metrics-api
+kubectl rollout status deploy/scm-metrics-api
+kubectl logs -f deploy/scm-metrics-api
+```
+
 ## Dashboard (Angular)
 
 A minimal Angular dashboard is included under `dashboard/`.

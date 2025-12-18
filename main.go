@@ -75,7 +75,7 @@ func ensureDatabaseExists() error {
 }
 
 func ensureSchema(conn *sql.DB) error {
-	if _, err := conn.Exec("CREATE TABLE IF NOT EXISTS server_metrics (time TIMESTAMPTZ NOT NULL, server_id TEXT NOT NULL, cpu DOUBLE PRECISION NOT NULL DEFAULT 0, memory DOUBLE PRECISION NOT NULL DEFAULT 0, memory_total_bytes BIGINT NOT NULL DEFAULT 0, memory_used_bytes BIGINT NOT NULL DEFAULT 0, disk DOUBLE PRECISION NOT NULL DEFAULT 0, disk_total_bytes BIGINT NOT NULL DEFAULT 0, disk_used_bytes BIGINT NOT NULL DEFAULT 0, disk_free_bytes BIGINT NOT NULL DEFAULT 0)"); err != nil {
+	if _, err := conn.Exec("CREATE TABLE IF NOT EXISTS server_metrics (time TIMESTAMPTZ NOT NULL, server_id TEXT NOT NULL, cpu DOUBLE PRECISION NOT NULL DEFAULT 0, memory DOUBLE PRECISION NOT NULL DEFAULT 0, memory_total_bytes BIGINT NOT NULL DEFAULT 0, memory_used_bytes BIGINT NOT NULL DEFAULT 0, disk DOUBLE PRECISION NOT NULL DEFAULT 0, disk_total_bytes BIGINT NOT NULL DEFAULT 0, disk_used_bytes BIGINT NOT NULL DEFAULT 0, disk_free_bytes BIGINT NOT NULL DEFAULT 0, uptime BIGINT NOT NULL DEFAULT 0, city TEXT, city_name TEXT, region TEXT, region_name TEXT)"); err != nil {
 		return err
 	}
 	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS memory_total_bytes BIGINT NOT NULL DEFAULT 0"); err != nil {
@@ -91,6 +91,21 @@ func ensureSchema(conn *sql.DB) error {
 		return err
 	}
 	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS disk_free_bytes BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS uptime BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS city TEXT"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS city_name TEXT"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS region TEXT"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS region_name TEXT"); err != nil {
 		return err
 	}
 	if _, err := conn.Exec("CREATE INDEX IF NOT EXISTS idx_server_metrics_server_id_time_desc ON server_metrics (server_id, time DESC)"); err != nil {
@@ -151,6 +166,11 @@ type CleanMetric struct {
 	DiskTotalBytes int64
 	DiskUsedBytes  int64
 	DiskFreeBytes  int64
+	Uptime   int64
+	City     string
+	CityName string
+	Region   string
+	RegionName string
 	Time     time.Time
 }
 
@@ -167,6 +187,11 @@ type LatestMetric struct {
 	DiskTotalBytes int64 `json:"disk_total_bytes"`
 	DiskUsedBytes  int64 `json:"disk_used_bytes"`
 	DiskFreeBytes  int64 `json:"disk_free_bytes"`
+	Uptime   int64     `json:"uptime"`
+	City     string    `json:"city"`
+	CityName string    `json:"city_name"`
+	Region   string    `json:"region"`
+	RegionName string  `json:"region_name"`
 }
 
 type HistoryMetric struct {
@@ -179,6 +204,11 @@ type HistoryMetric struct {
 	DiskTotalBytes int64    `json:"disk_total_bytes"`
 	DiskUsedBytes  int64    `json:"disk_used_bytes"`
 	DiskFreeBytes  int64    `json:"disk_free_bytes"`
+	Uptime        int64     `json:"uptime"`
+	City          string    `json:"city"`
+	CityName      string    `json:"city_name"`
+	Region        string    `json:"region"`
+	RegionName    string    `json:"region_name"`
 }
 
 type SeriesMeta struct {
@@ -196,6 +226,25 @@ type SeriesPointResponse struct {
 	Tags        map[string]interface{}   `json:"tags"`
 }
 
+type ServerStatus struct {
+	ServerID   string    `json:"server_id"`
+	LastSeen   time.Time `json:"last_seen"`
+	AgeSeconds int64     `json:"age_seconds"`
+	Online     bool      `json:"online"`
+	City       string    `json:"city"`
+	CityName   string    `json:"city_name"`
+	Region     string    `json:"region"`
+	RegionName string    `json:"region_name"`
+}
+
+type CityStatusSummary struct {
+	City         string `json:"city"`
+	CityName     string `json:"city_name"`
+	OnlineCount  int64  `json:"online"`
+	OfflineCount int64  `json:"offline"`
+	Total        int64  `json:"total"`
+}
+
 // ---------- INGEST HANDLER ----------
 
 func ingestHandler(w http.ResponseWriter, r *http.Request) {
@@ -205,9 +254,10 @@ func ingestHandler(w http.ResponseWriter, r *http.Request) {
 
 	var payload TelegrafPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, err.Error(), 400)
+		writeJSONError(w, 400, err.Error())
 		return
 	}
+
 	if debug {
 		log.Printf("ingest: received %d metrics", len(payload.Metrics))
 	}
@@ -215,110 +265,134 @@ func ingestHandler(w http.ResponseWriter, r *http.Request) {
 	var cm CleanMetric
 	var points []SeriesPoint
 
+	// Disk aggregation
 	var diskTotalBytes int64
 	var diskUsedBytes int64
 	var diskFreeBytes int64
 	seenDisk := make(map[string]struct{})
 
 	for _, m := range payload.Metrics {
+
 		if debug {
-			log.Printf("ingest: metric name=%s tags=%v fields=%v", m.Name, m.Tags, keysOf(m.Fields))
+			log.Printf("ingest: metric name=%s tags=%v fields=%v",
+				m.Name, m.Tags, keysOf(m.Fields))
 		}
 
+		/* -----------------------------
+		   Server identity (once)
+		-------------------------------- */
 		if cm.ServerID == "" {
 			cm.ServerID = m.Tags["server_id"]
-			// 🚨 SAFETY CHECK
 			if cm.ServerID == "" || cm.ServerID == "$HOSTNAME" {
 				cm.ServerID = m.Tags["host"]
 			}
 		}
 
-		if cm.Time.IsZero() {
-			cm.Time = time.Unix(int64(m.Timestamp), 0)
+		/* -----------------------------
+		   City / Region (ONLY from kiosk_*)
+		-------------------------------- */
+		if strings.HasPrefix(m.Name, "kiosk_") {
+
+			if cm.City == "" && m.Tags["city"] != "" {
+				cm.City = m.Tags["city"]
+			}
+			if cm.CityName == "" && m.Tags["city_full_name"] != "" {
+				cm.CityName = m.Tags["city_full_name"]
+			}
+
+			if cm.Region == "" && m.Tags["code"] != "" {
+				cm.Region = m.Tags["code"]
+			}
+			if cm.RegionName == "" && m.Tags["name"] != "" {
+				cm.RegionName = m.Tags["name"]
+			}
 		}
 
+		/* -----------------------------
+		   Timestamp
+		-------------------------------- */
+		if cm.Time.IsZero() && m.Timestamp > 0 {
+			cm.Time = time.Unix(int64(m.Timestamp), 0)
+		}
 		ptTime := time.Unix(int64(m.Timestamp), 0)
 
+		/* -----------------------------
+		   Metrics
+		-------------------------------- */
 		switch m.Name {
+
+		/* ---------- CPU ---------- */
 		case "cpu":
-			if cpuTag := m.Tags["cpu"]; cpuTag != "" && cpuTag != "cpu-total" {
+			if m.Tags["cpu"] != "cpu-total" {
 				continue
 			}
-			if v, ok := m.Fields["usage_idle"].(float64); ok {
-				cm.CPU = 100 - v
-			} else if debug {
-				log.Printf("ingest: cpu missing field usage_idle")
+			if cm.CPU == 0 {
+				if v, ok := m.Fields["usage_idle"].(float64); ok {
+					cm.CPU = 100 - v
+				}
 			}
+
 			points = append(points,
 				seriesPointFloat(ptTime, cm.ServerID, "cpu", "usage_user", m.Fields, m.Tags),
 				seriesPointFloat(ptTime, cm.ServerID, "cpu", "usage_system", m.Fields, m.Tags),
 				seriesPointFloat(ptTime, cm.ServerID, "cpu", "usage_iowait", m.Fields, m.Tags),
 				seriesPointFloat(ptTime, cm.ServerID, "cpu", "usage_steal", m.Fields, m.Tags),
-				seriesPointFloat(ptTime, cm.ServerID, "cpu", "usage_idle", m.Fields, m.Tags),
 			)
+
+		/* ---------- MEMORY ---------- */
 		case "mem":
 			if v, ok := m.Fields["available_percent"].(float64); ok {
 				cm.Memory = 100 - v
-			} else if debug {
-				log.Printf("ingest: mem missing field available_percent")
 			}
 			if v, ok := m.Fields["total"].(float64); ok {
 				cm.MemoryTotalBytes = int64(v)
-			} else if debug {
-				log.Printf("ingest: mem missing field total")
 			}
 			if v, ok := m.Fields["used"].(float64); ok {
 				cm.MemoryUsedBytes = int64(v)
-			} else if debug {
-				log.Printf("ingest: mem missing field used")
 			}
+
 			points = append(points,
-				seriesPointFloat(ptTime, cm.ServerID, "mem", "available_percent", m.Fields, m.Tags),
 				seriesPointFloat(ptTime, cm.ServerID, "mem", "used_percent", m.Fields, m.Tags),
 				seriesPointInt(ptTime, cm.ServerID, "mem", "total", m.Fields, m.Tags),
 				seriesPointInt(ptTime, cm.ServerID, "mem", "used", m.Fields, m.Tags),
 			)
+
+		/* ---------- SWAP ---------- */
 		case "swap":
 			points = append(points,
 				seriesPointFloat(ptTime, cm.ServerID, "swap", "used_percent", m.Fields, m.Tags),
 				seriesPointInt(ptTime, cm.ServerID, "swap", "in", m.Fields, m.Tags),
 				seriesPointInt(ptTime, cm.ServerID, "swap", "out", m.Fields, m.Tags),
 			)
+
+		/* ---------- DISK (AGGREGATED) ---------- */
 		case "disk":
-			fstype := m.Tags["fstype"]
-			switch fstype {
-			case "tmpfs", "devtmpfs", "overlay", "squashfs", "proc", "sysfs", "cgroup", "cgroup2", "nsfs", "rpc_pipefs", "devpts", "securityfs", "pstore", "hugetlbfs", "mqueue", "tracefs", "fusectl":
+			switch m.Tags["fstype"] {
+			case "tmpfs", "devtmpfs", "overlay", "squashfs",
+				"proc", "sysfs", "cgroup", "cgroup2",
+				"nsfs", "rpc_pipefs", "devpts",
+				"securityfs", "pstore", "hugetlbfs",
+				"mqueue", "tracefs", "fusectl":
 				continue
 			}
 
-			path := m.Tags["path"]
-			device := m.Tags["device"]
-			seenKey := device + "|" + path
-			if _, ok := seenDisk[seenKey]; ok {
+			key := m.Tags["device"] + "|" + m.Tags["path"]
+			if _, ok := seenDisk[key]; ok {
 				continue
 			}
-			seenDisk[seenKey] = struct{}{}
+			seenDisk[key] = struct{}{}
 
-			var total, used, free int64
 			if v, ok := m.Fields["total"].(float64); ok {
-				total = int64(v)
-			} else if debug {
-				log.Printf("ingest: disk missing field total")
+				diskTotalBytes += int64(v)
 			}
 			if v, ok := m.Fields["used"].(float64); ok {
-				used = int64(v)
-			} else if debug {
-				log.Printf("ingest: disk missing field used")
+				diskUsedBytes += int64(v)
 			}
 			if v, ok := m.Fields["free"].(float64); ok {
-				free = int64(v)
-			} else if debug {
-				log.Printf("ingest: disk missing field free")
+				diskFreeBytes += int64(v)
 			}
 
-			diskTotalBytes += total
-			diskUsedBytes += used
-			diskFreeBytes += free
+		/* ---------- DISK IO ---------- */
 		case "diskio":
 			points = append(points,
 				seriesPointInt(ptTime, cm.ServerID, "diskio", "read_bytes", m.Fields, m.Tags),
@@ -326,13 +400,24 @@ func ingestHandler(w http.ResponseWriter, r *http.Request) {
 				seriesPointFloat(ptTime, cm.ServerID, "diskio", "io_util", m.Fields, m.Tags),
 				seriesPointFloat(ptTime, cm.ServerID, "diskio", "io_await", m.Fields, m.Tags),
 			)
+
+		/* ---------- SYSTEM ---------- */
 		case "system":
+			if v, ok := m.Fields["uptime"].(float64); ok {
+				cm.Uptime = int64(v)
+				points = append(points,
+					seriesPointInt(ptTime, cm.ServerID, "system", "uptime", m.Fields, m.Tags),
+				)
+			}
+
 			points = append(points,
 				seriesPointFloat(ptTime, cm.ServerID, "system", "load1", m.Fields, m.Tags),
 				seriesPointFloat(ptTime, cm.ServerID, "system", "load5", m.Fields, m.Tags),
 				seriesPointFloat(ptTime, cm.ServerID, "system", "load15", m.Fields, m.Tags),
 				seriesPointInt(ptTime, cm.ServerID, "system", "uptime", m.Fields, m.Tags),
 			)
+
+		/* ---------- PROCESSES ---------- */
 		case "processes":
 			points = append(points,
 				seriesPointInt(ptTime, cm.ServerID, "processes", "running", m.Fields, m.Tags),
@@ -343,11 +428,14 @@ func ingestHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cm.DiskTotalBytes = diskTotalBytes
-	cm.DiskUsedBytes = diskUsedBytes
-	cm.DiskFreeBytes = diskFreeBytes
+	/* -----------------------------
+	   Final disk %
+	-------------------------------- */
 	if diskTotalBytes > 0 {
-		cm.Disk = (float64(diskUsedBytes) / float64(diskTotalBytes)) * 100
+		cm.Disk = float64(diskUsedBytes) * 100 / float64(diskTotalBytes)
+		cm.DiskTotalBytes = diskTotalBytes
+		cm.DiskUsedBytes = diskUsedBytes
+		cm.DiskFreeBytes = diskFreeBytes
 	}
 	points = append(points,
 		SeriesPoint{Time: cm.Time, ServerID: cm.ServerID, Measurement: "disk", Field: "total", ValueInt: &cm.DiskTotalBytes, TagsJSON: []byte(`{"aggregated":true}`)},
@@ -364,7 +452,7 @@ func ingestHandler(w http.ResponseWriter, r *http.Request) {
 	if err := saveSeriesPoints(points); err != nil {
 		log.Println("metric_points insert error:", err)
 	}
-	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 type SeriesPoint struct {
@@ -432,7 +520,7 @@ func saveSeriesPoints(points []SeriesPoint) error {
 func seriesListHandler(w http.ResponseWriter, r *http.Request) {
 	serverID := r.URL.Query().Get("server_id")
 	if serverID == "" {
-		http.Error(w, "server_id required", 400)
+		writeJSONError(w, 400, "server_id required")
 		return
 	}
 
@@ -443,7 +531,7 @@ func seriesListHandler(w http.ResponseWriter, r *http.Request) {
 		ORDER BY measurement, field
 	`, serverID)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		writeJSONError(w, 500, err.Error())
 		return
 	}
 	defer rows.Close()
@@ -458,12 +546,70 @@ func seriesListHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
+func serversStatusCityHandler(w http.ResponseWriter, r *http.Request) {
+	thresholdStr := r.URL.Query().Get("threshold")
+	if thresholdStr == "" {
+		thresholdStr = "5m"
+	}
+	if _, err := time.ParseDuration(thresholdStr); err != nil {
+		writeJSONError(w, 400, "invalid threshold")
+		return
+	}
+
+	region := r.URL.Query().Get("region")
+
+	q := `WITH latest AS (
+		SELECT DISTINCT ON (server_id)
+			server_id, time, city, city_name
+		FROM server_metrics`
+	args := []interface{}{thresholdStr}
+	where := ""
+	if region != "" {
+		args = append(args, region)
+		where += " region = $" + fmt.Sprint(len(args))
+	}
+	if where != "" {
+		q += " WHERE" + where
+	}
+	q += `
+		ORDER BY server_id, time DESC
+	)
+	SELECT
+		COALESCE(city, '') AS city,
+		COALESCE(city_name, '') AS city_name,
+		SUM(CASE WHEN now() - time <= $1::interval THEN 1 ELSE 0 END) AS online,
+		SUM(CASE WHEN now() - time >  $1::interval THEN 1 ELSE 0 END) AS offline,
+		COUNT(*) AS total
+	FROM latest
+	GROUP BY 1, 2
+	ORDER BY 1, 2`
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		writeJSONError(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	var out []CityStatusSummary
+	for rows.Next() {
+		var s CityStatusSummary
+		if err := rows.Scan(&s.City, &s.CityName, &s.OnlineCount, &s.OfflineCount, &s.Total); err != nil {
+			writeJSONError(w, 500, err.Error())
+			return
+		}
+		out = append(out, s)
+	}
+
+	json.NewEncoder(w).Encode(out)
+}
+
 func seriesLatestHandler(w http.ResponseWriter, r *http.Request) {
 	serverID := r.URL.Query().Get("server_id")
 	measurement := r.URL.Query().Get("measurement")
 	field := r.URL.Query().Get("field")
 	if serverID == "" || measurement == "" || field == "" {
-		http.Error(w, "server_id, measurement, field required", 400)
+		writeJSONError(w, 400, "server_id, measurement, field required")
 		return
 	}
 
@@ -485,7 +631,7 @@ func seriesLatestHandler(w http.ResponseWriter, r *http.Request) {
 		LIMIT 1
 	`, serverID, measurement, field, tagFilter).Scan(&resp.Time, &resp.ServerID, &resp.Measurement, &resp.Field, &resp.ValueDouble, &resp.ValueInt, &tagsRaw)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		writeJSONError(w, 500, err.Error())
 		return
 	}
 	var tags map[string]interface{}
@@ -500,7 +646,7 @@ func seriesQueryHandler(w http.ResponseWriter, r *http.Request) {
 	measurement := r.URL.Query().Get("measurement")
 	field := r.URL.Query().Get("field")
 	if serverID == "" || measurement == "" || field == "" {
-		http.Error(w, "server_id, measurement, field required", 400)
+		writeJSONError(w, 400, "server_id, measurement, field required")
 		return
 	}
 
@@ -525,7 +671,7 @@ func seriesQueryHandler(w http.ResponseWriter, r *http.Request) {
 		ORDER BY time
 	`, serverID, measurement, field, rng, tagFilter)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		writeJSONError(w, 500, err.Error())
 		return
 	}
 	defer rows.Close()
@@ -559,9 +705,9 @@ func keysOf(m map[string]interface{}) []string {
 
 func saveMetric(m CleanMetric) {
 	_, err := db.Exec(
-		`INSERT INTO server_metrics(time, server_id, cpu, memory, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		m.Time, m.ServerID, m.CPU, m.Memory, m.MemoryTotalBytes, m.MemoryUsedBytes, m.Disk, m.DiskTotalBytes, m.DiskUsedBytes, m.DiskFreeBytes,
+		`INSERT INTO server_metrics(time, server_id, cpu, memory, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes, uptime, city, city_name, region, region_name)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		m.Time, m.ServerID, m.CPU, m.Memory, m.MemoryTotalBytes, m.MemoryUsedBytes, m.Disk, m.DiskTotalBytes, m.DiskUsedBytes, m.DiskFreeBytes, m.Uptime, m.City, m.CityName, m.Region, m.RegionName,
 	)
 	if err != nil {
 		log.Println("DB insert error:", err)
@@ -571,9 +717,31 @@ func saveMetric(m CleanMetric) {
 // ---------- READ HANDLERS ----------
 
 func serversHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query(`SELECT DISTINCT server_id FROM server_metrics ORDER BY server_id`)
+	city := r.URL.Query().Get("city")
+	region := r.URL.Query().Get("region")
+
+	q := `SELECT DISTINCT server_id FROM server_metrics`
+	args := make([]interface{}, 0, 2)
+	where := ""
+	if city != "" {
+		args = append(args, city)
+		where += " city = $" + fmt.Sprint(len(args))
+	}
+	if region != "" {
+		args = append(args, region)
+		if where != "" {
+			where += " AND"
+		}
+		where += " region = $" + fmt.Sprint(len(args))
+	}
+	if where != "" {
+		q += " WHERE" + where
+	}
+	q += " ORDER BY server_id"
+
+	rows, err := db.Query(q, args...)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		writeJSONError(w, 500, err.Error())
 		return
 	}
 	defer rows.Close()
@@ -588,15 +756,75 @@ func serversHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(servers)
 }
 
+func serversStatusHandler(w http.ResponseWriter, r *http.Request) {
+	thresholdStr := r.URL.Query().Get("threshold")
+	if thresholdStr == "" {
+		thresholdStr = "5m"
+	}
+	threshold, err := time.ParseDuration(thresholdStr)
+	if err != nil {
+		writeJSONError(w, 400, "invalid threshold")
+		return
+	}
+
+	city := r.URL.Query().Get("city")
+	region := r.URL.Query().Get("region")
+
+	q := `SELECT DISTINCT ON (server_id)
+		server_id, time, city, city_name, region, region_name
+		FROM server_metrics`
+	args := make([]interface{}, 0, 2)
+	where := ""
+	if city != "" {
+		args = append(args, city)
+		where += " city = $" + fmt.Sprint(len(args))
+	}
+	if region != "" {
+		args = append(args, region)
+		if where != "" {
+			where += " AND"
+		}
+		where += " region = $" + fmt.Sprint(len(args))
+	}
+	if where != "" {
+		q += " WHERE" + where
+	}
+	q += " ORDER BY server_id, time DESC"
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		writeJSONError(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now().UTC()
+	var out []ServerStatus
+	for rows.Next() {
+		var s ServerStatus
+		if err := rows.Scan(&s.ServerID, &s.LastSeen, &s.City, &s.CityName, &s.Region, &s.RegionName); err != nil {
+			writeJSONError(w, 500, err.Error())
+			return
+		}
+		age := now.Sub(s.LastSeen)
+		s.AgeSeconds = int64(age.Seconds())
+		s.Online = age <= threshold
+		out = append(out, s)
+	}
+
+	json.NewEncoder(w).Encode(out)
+}
+
 func latestHandler(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.Query(`
 		SELECT DISTINCT ON (server_id)
-		  server_id, time, cpu, memory, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes
+		  server_id, time, cpu, memory, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes,
+		  uptime, city, city_name, region, region_name
 		FROM server_metrics
 		ORDER BY server_id, time DESC
 	`)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		writeJSONError(w, 500, err.Error())
 		return
 	}
 	defer rows.Close()
@@ -604,7 +832,23 @@ func latestHandler(w http.ResponseWriter, r *http.Request) {
 	var result []LatestMetric
 	for rows.Next() {
 		var m LatestMetric
-		rows.Scan(&m.ServerID, &m.Time, &m.CPU, &m.Memory, &m.MemoryTotalBytes, &m.MemoryUsedBytes, &m.Disk, &m.DiskTotalBytes, &m.DiskUsedBytes, &m.DiskFreeBytes)
+		rows.Scan(
+			&m.ServerID,
+			&m.Time,
+			&m.CPU,
+			&m.Memory,
+			&m.MemoryTotalBytes,
+			&m.MemoryUsedBytes,
+			&m.Disk,
+			&m.DiskTotalBytes,
+			&m.DiskUsedBytes,
+			&m.DiskFreeBytes,
+			&m.Uptime,
+			&m.City,
+			&m.CityName,
+			&m.Region,
+			&m.RegionName,
+		)
 		result = append(result, m)
 	}
 
@@ -617,6 +861,7 @@ func withCORS(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Max-Age", "86400")
+		w.Header().Set("Content-Type", "application/json")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -627,15 +872,27 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
 func rootHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Application is up and running"))
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func historyHandler(w http.ResponseWriter, r *http.Request) {
 	serverID := r.URL.Query().Get("server_id")
 	if serverID == "" {
-		http.Error(w, "server_id required", 400)
+		writeJSONError(w, 400, "server_id required")
 		return
 	}
 
@@ -645,14 +902,15 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := db.Query(`
-		SELECT time, cpu, memory, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes
+		SELECT time, cpu, memory, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes,
+		       uptime, city, city_name, region, region_name
 		FROM server_metrics
 		WHERE server_id = $1
 		AND time > now() - $2::interval
 		ORDER BY time
 	`, serverID, rng)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		writeJSONError(w, 500, err.Error())
 		return
 	}
 	defer rows.Close()
@@ -660,7 +918,22 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 	var result []HistoryMetric
 	for rows.Next() {
 		var m HistoryMetric
-		rows.Scan(&m.Time, &m.CPU, &m.Memory, &m.MemoryTotalBytes, &m.MemoryUsedBytes, &m.Disk, &m.DiskTotalBytes, &m.DiskUsedBytes, &m.DiskFreeBytes)
+		rows.Scan(
+			&m.Time,
+			&m.CPU,
+			&m.Memory,
+			&m.MemoryTotalBytes,
+			&m.MemoryUsedBytes,
+			&m.Disk,
+			&m.DiskTotalBytes,
+			&m.DiskUsedBytes,
+			&m.DiskFreeBytes,
+			&m.Uptime,
+			&m.City,
+			&m.CityName,
+			&m.Region,
+			&m.RegionName,
+		)
 		result = append(result, m)
 	}
 
@@ -694,6 +967,8 @@ func main() {
 	http.HandleFunc("/", rootHandler)
 	http.HandleFunc("/api/metrics", ingestHandler)
 	http.HandleFunc("/api/servers", serversHandler)
+	http.HandleFunc("/api/servers/status", serversStatusHandler)
+	http.HandleFunc("/api/servers/status/city", serversStatusCityHandler)
 	http.HandleFunc("/api/metrics/latest", latestHandler)
 	http.HandleFunc("/api/metrics/history", historyHandler)
 	http.HandleFunc("/api/series", seriesListHandler)
