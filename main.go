@@ -9,11 +9,19 @@ import (
 	"os"
 	"strings"
 	"time"
+    "path/filepath"
 
 	_ "github.com/lib/pq"
 )
 
 var db *sql.DB
+var metricPointsChan chan SeriesPoint
+
+const (
+    batchSize        = 1000           // flush immediately when queue grows
+    flushIntervalSec = 1              // flush at least every 1 second
+)
+
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -449,8 +457,9 @@ func ingestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	saveMetric(cm)
-	if err := saveSeriesPoints(points); err != nil {
-		log.Println("metric_points insert error:", err)
+	for _, p := range points {
+		if p.ServerID == "" { continue }
+		metricPointsChan <- p
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -576,13 +585,13 @@ func serversStatusCityHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	SELECT
 		COALESCE(city, '') AS city,
-		COALESCE(city_name, '') AS city_name,
+		MAX(COALESCE(city_name, '')) AS city_name,
 		SUM(CASE WHEN now() - time <= $1::interval THEN 1 ELSE 0 END) AS online,
 		SUM(CASE WHEN now() - time >  $1::interval THEN 1 ELSE 0 END) AS offline,
 		COUNT(*) AS total
 	FROM latest
-	GROUP BY 1, 2
-	ORDER BY 1, 2`
+	GROUP BY 1
+	ORDER BY 1`
 
 	rows, err := db.Query(q, args...)
 	if err != nil {
@@ -940,6 +949,99 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+
+func metricWriter() {
+    ticker := time.NewTicker(time.Duration(flushIntervalSec) * time.Second)
+    defer ticker.Stop()
+
+    buffer := make([]SeriesPoint, 0, batchSize)
+
+    for {
+        select {
+        case p := <-metricPointsChan:
+            buffer = append(buffer, p)
+            if len(buffer) >= batchSize {
+                flushBatch(buffer)
+                buffer = buffer[:0]
+            }
+        case <-ticker.C:
+            if len(buffer) > 0 {
+                flushBatch(buffer)
+                buffer = buffer[:0]
+            }
+        }
+    }
+}
+
+func flushBatch(batch []SeriesPoint) {
+    if len(batch) == 0 { return }
+
+    tx, err := db.Begin()
+    if err != nil {
+        log.Println("batch: tx begin err:", err)
+        return
+    }
+
+    stmt, err := tx.Prepare(`INSERT INTO metric_points(time, server_id, measurement, field, value_double, value_int, tags) VALUES ($1,$2,$3,$4,$5,$6,$7)`)
+    if err != nil {
+        log.Println("batch: prepare err:", err)
+        _ = tx.Rollback()
+        return
+    }
+
+    for _, p := range batch {
+        if p.TagsJSON == nil {
+            p.TagsJSON = []byte(`{}`)
+        }
+        _, err := stmt.Exec(p.Time, p.ServerID, p.Measurement, p.Field, p.ValueDouble, p.ValueInt, p.TagsJSON)
+        if err != nil {
+            log.Println("batch: insert err:", err)
+            _ = stmt.Close()
+            _ = tx.Rollback()
+            return
+        }
+    }
+
+    _ = stmt.Close()
+    _ = tx.Commit()
+}
+
+func runMigrations(db *sql.DB) error {
+    _, _ = db.Exec(`CREATE TABLE IF NOT EXISTS _migrations (
+        filename TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`)
+
+    files, err := filepath.Glob("./migrations/**/*.sql")
+    if err != nil {
+        return err
+    }
+
+    for _, file := range files {
+        var exists bool
+        err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM _migrations WHERE filename=$1)`, file).Scan(&exists)
+        if err != nil {
+            return fmt.Errorf("migration check failed on %s: %w", file, err)
+        }
+        if exists {
+            continue
+        }
+
+        sqlBytes, err := os.ReadFile(file)
+        if err != nil {
+            return err
+        }
+
+        log.Println("Running migration:", file)
+        if _, err := db.Exec(string(sqlBytes)); err != nil {
+            return fmt.Errorf("migration %s failed: %w", file, err)
+        }
+
+        _, _ = db.Exec(`INSERT INTO _migrations(filename) VALUES($1)`, file)
+    }
+    return nil
+}
+
 // ---------- MAIN ----------
 
 func main() {
@@ -956,6 +1058,14 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// ---- 🟢 CONNECTION POOL IMPORTANT ----
+    // Handles thousands of devices safely, without blowing up PostgreSQL
+    db.SetMaxOpenConns(10)                // max active DB conns
+    db.SetMaxIdleConns(5)                 // idle reusable conns
+    db.SetConnMaxLifetime(30 * time.Minute)
+    db.SetConnMaxIdleTime(5 * time.Minute)
+
+
 	if err = db.Ping(); err != nil {
 		log.Fatal("DB connection failed:", err)
 	}
@@ -963,6 +1073,10 @@ func main() {
 	if err := ensureSchema(db); err != nil {
 		log.Fatal("DB migration failed:", err)
 	}
+
+	// if err := runMigrations(db); err != nil {       // <-- ADD THIS LINE
+	// 	log.Fatal("SQL migrations failed:", err)
+	// }
 
 	http.HandleFunc("/", rootHandler)
 	http.HandleFunc("/api/metrics", ingestHandler)
@@ -975,6 +1089,8 @@ func main() {
 	http.HandleFunc("/api/series/latest", seriesLatestHandler)
 	http.HandleFunc("/api/series/query", seriesQueryHandler)
 
+	metricPointsChan = make(chan SeriesPoint, 5000)
+	go metricWriter()
 	log.Println("Metrics API listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", withCORS(http.DefaultServeMux)))
 }

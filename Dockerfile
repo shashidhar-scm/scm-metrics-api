@@ -20,7 +20,7 @@ COPY --from=builder /out/metrics-api /app/metrics-api
 COPY --from=builder /src/migrations /app/migrations
 
 ENV PORT=8080
-ENV DEBUG=1
+# ENV DEBUG=1
 
 EXPOSE 8080
 

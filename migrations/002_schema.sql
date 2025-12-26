@@ -1,5 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
+-- Main rollup table
 CREATE TABLE IF NOT EXISTS server_metrics (
   time TIMESTAMPTZ NOT NULL,
   server_id TEXT NOT NULL,
@@ -26,6 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_server_metrics_time
 
 SELECT create_hypertable('server_metrics', 'time', if_not_exists => TRUE);
 
+-- Metric points (raw)
 CREATE TABLE IF NOT EXISTS metric_points (
   time TIMESTAMPTZ NOT NULL,
   server_id TEXT NOT NULL,

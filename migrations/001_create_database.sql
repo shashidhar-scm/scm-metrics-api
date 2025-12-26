@@ -1,2 +1,8 @@
-SELECT 'CREATE DATABASE metrics'
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'metrics')\gexec
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT FROM pg_database WHERE datname = 'metrics'
+    ) THEN
+        EXECUTE 'CREATE DATABASE metrics';
+    END IF;
+END$$;
