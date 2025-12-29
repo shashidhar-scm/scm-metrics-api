@@ -15,8 +15,8 @@ data:
   SMTP_USE_TLS: "true"
   DATABASE_URL: postgres://postgres:secret@timescaledb.monitoring.svc.cluster.local:5432/metrics?sslmode=disable
   CORS_ALLOWED_ORIGINS: "https://scm-ads.citypost.us,http://localhost:4200,https://pivotal-cms.web.app"
-  RATE_LIMIT_WINDOW_SECONDS: 60
-  RATE_LIMIT_MAX: 50
+  RATE_LIMIT_WINDOW_SECONDS: "60"
+  RATE_LIMIT_MAX: "50"
 kind: ConfigMap
 metadata:
   name: scm-metrics-api
