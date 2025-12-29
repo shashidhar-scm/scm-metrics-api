@@ -11,6 +11,11 @@ import (
 	"metrics-api/internal/repository"
 )
 
+const (
+	defaultPageSize = 25
+	maxPageSize     = 200
+)
+
 type MetricsHandler struct {
 	repo           *repository.MetricsRepository
 	metricPoints   chan models.SeriesPoint
@@ -224,13 +229,19 @@ func (h *MetricsHandler) SeriesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := h.repo.ListSeriesMeta(r.Context(), serverID)
+	p, err := parsePaginationParams(r, defaultPageSize, maxPageSize)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
+
+	items, total, err := h.repo.ListSeriesMeta(r.Context(), serverID, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	WriteJSON(w, http.StatusOK, items)
+	writePaginatedResponse(w, http.StatusOK, items, p.page, p.pageSize, total)
 }
 
 func (h *MetricsHandler) SeriesLatest(w http.ResponseWriter, r *http.Request) {
@@ -275,26 +286,38 @@ func (h *MetricsHandler) SeriesQuery(w http.ResponseWriter, r *http.Request) {
 		tagFilter = "{}"
 	}
 
-	out, err := h.repo.SeriesQuery(r.Context(), serverID, measurement, field, rng, tagFilter)
+	p, err := parsePaginationParams(r, defaultPageSize, maxPageSize)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
+
+	out, total, err := h.repo.SeriesQuery(r.Context(), serverID, measurement, field, rng, tagFilter, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	WriteJSON(w, http.StatusOK, out)
+	writePaginatedResponse(w, http.StatusOK, out, p.page, p.pageSize, total)
 }
 
 func (h *MetricsHandler) Servers(w http.ResponseWriter, r *http.Request) {
 	city := r.URL.Query().Get("city")
 	region := r.URL.Query().Get("region")
 
-	servers, err := h.repo.Servers(r.Context(), city, region)
+	p, err := parsePaginationParams(r, defaultPageSize, maxPageSize)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
+
+	servers, total, err := h.repo.Servers(r.Context(), city, region, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	WriteJSON(w, http.StatusOK, servers)
+	writePaginatedResponse(w, http.StatusOK, servers, p.page, p.pageSize, total)
 }
 
 func (h *MetricsHandler) ServersStatus(w http.ResponseWriter, r *http.Request) {
@@ -311,7 +334,13 @@ func (h *MetricsHandler) ServersStatus(w http.ResponseWriter, r *http.Request) {
 	city := r.URL.Query().Get("city")
 	region := r.URL.Query().Get("region")
 
-	statuses, err := h.repo.ServerStatus(r.Context(), city, region)
+	p, err := parsePaginationParams(r, defaultPageSize, maxPageSize)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
+
+	statuses, total, err := h.repo.ServerStatus(r.Context(), city, region, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -322,7 +351,7 @@ func (h *MetricsHandler) ServersStatus(w http.ResponseWriter, r *http.Request) {
 		statuses[i].Online = age <= threshold
 	}
 
-	WriteJSON(w, http.StatusOK, statuses)
+	writePaginatedResponse(w, http.StatusOK, statuses, p.page, p.pageSize, total)
 }
 
 func (h *MetricsHandler) ServersStatusCity(w http.ResponseWriter, r *http.Request) {
@@ -337,23 +366,35 @@ func (h *MetricsHandler) ServersStatusCity(w http.ResponseWriter, r *http.Reques
 
 	region := r.URL.Query().Get("region")
 
-	items, err := h.repo.CityStatusSummary(r.Context(), region, thresholdStr)
+	p, err := parsePaginationParams(r, defaultPageSize, maxPageSize)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
+
+	items, total, err := h.repo.CityStatusSummary(r.Context(), region, thresholdStr, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	WriteJSON(w, http.StatusOK, items)
+	writePaginatedResponse(w, http.StatusOK, items, p.page, p.pageSize, total)
 }
 
 func (h *MetricsHandler) Latest(w http.ResponseWriter, r *http.Request) {
-	result, err := h.repo.LatestMetrics(r.Context())
+	p, err := parsePaginationParams(r, defaultPageSize, maxPageSize)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
+
+	result, total, err := h.repo.LatestMetrics(r.Context(), p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	WriteJSON(w, http.StatusOK, result)
+	writePaginatedResponse(w, http.StatusOK, result, p.page, p.pageSize, total)
 }
 
 func (h *MetricsHandler) History(w http.ResponseWriter, r *http.Request) {
@@ -368,13 +409,19 @@ func (h *MetricsHandler) History(w http.ResponseWriter, r *http.Request) {
 		rng = "1h"
 	}
 
-	result, err := h.repo.HistoryMetrics(r.Context(), serverID, rng)
+	p, err := parsePaginationParams(r, defaultPageSize, maxPageSize)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
+
+	result, total, err := h.repo.HistoryMetrics(r.Context(), serverID, rng, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	WriteJSON(w, http.StatusOK, result)
+	writePaginatedResponse(w, http.StatusOK, result, p.page, p.pageSize, total)
 }
 
 func WriteJSONError(w http.ResponseWriter, status int, message string) {

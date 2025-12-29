@@ -5,6 +5,7 @@ import (
     "database/sql"
     "encoding/json"
     "fmt"
+    "strings"
     "time"
 
     "metrics-api/internal/models"
@@ -17,6 +18,14 @@ type MetricsRepository struct {
 
 func NewMetricsRepository(db *sql.DB) *MetricsRepository {
     return &MetricsRepository{db: db}
+}
+
+func (r *MetricsRepository) countQuery(ctx context.Context, query string, args ...interface{}) (int, error) {
+    var total int
+    if err := r.db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
+        return 0, err
+    }
+    return total, nil
 }
 
 func (r *MetricsRepository) SaveMetric(ctx context.Context, m models.CleanMetric) error {
@@ -75,13 +84,27 @@ func (r *MetricsRepository) SaveSeriesPoints(ctx context.Context, points []model
     return tx.Commit()
 }
 
-func (r *MetricsRepository) ListSeriesMeta(ctx context.Context, serverID string) ([]models.SeriesMeta, error) {
-    rows, err := r.db.QueryContext(ctx,
-        `SELECT DISTINCT measurement, field FROM metric_points WHERE server_id = $1 ORDER BY measurement, field`,
+func (r *MetricsRepository) ListSeriesMeta(ctx context.Context, serverID string, limit, offset int) ([]models.SeriesMeta, int, error) {
+    total, err := r.countQuery(ctx,
+        `SELECT COUNT(*) FROM (
+            SELECT 1 FROM metric_points WHERE server_id = $1 GROUP BY measurement, field
+        ) AS sub`,
         serverID,
     )
     if err != nil {
-        return nil, err
+        return nil, 0, err
+    }
+
+    rows, err := r.db.QueryContext(ctx,
+        `SELECT DISTINCT measurement, field
+         FROM metric_points
+         WHERE server_id = $1
+         ORDER BY measurement, field
+         LIMIT $2 OFFSET $3`,
+        serverID, limit, offset,
+    )
+    if err != nil {
+        return nil, 0, err
     }
     defer rows.Close()
 
@@ -89,11 +112,14 @@ func (r *MetricsRepository) ListSeriesMeta(ctx context.Context, serverID string)
     for rows.Next() {
         var m models.SeriesMeta
         if err := rows.Scan(&m.Measurement, &m.Field); err != nil {
-            return nil, err
+            return nil, 0, err
         }
         out = append(out, m)
     }
-    return out, rows.Err()
+    if err := rows.Err(); err != nil {
+        return nil, 0, err
+    }
+    return out, total, nil
 }
 
 func (r *MetricsRepository) SeriesLatest(ctx context.Context, serverID, measurement, field, tagFilter string) (*models.SeriesPointResponse, error) {
@@ -116,17 +142,28 @@ func (r *MetricsRepository) SeriesLatest(ctx context.Context, serverID, measurem
     return &resp, nil
 }
 
-func (r *MetricsRepository) SeriesQuery(ctx context.Context, serverID, measurement, field, rng, tagFilter string) ([]models.SeriesPointResponse, error) {
+func (r *MetricsRepository) SeriesQuery(ctx context.Context, serverID, measurement, field, rng, tagFilter string, limit, offset int) ([]models.SeriesPointResponse, int, error) {
+    total, err := r.countQuery(ctx,
+        `SELECT COUNT(*) FROM metric_points
+         WHERE server_id = $1 AND measurement = $2 AND field = $3
+           AND time > now() - $4::interval AND tags @> $5::jsonb`,
+        serverID, measurement, field, rng, tagFilter,
+    )
+    if err != nil {
+        return nil, 0, err
+    }
+
     rows, err := r.db.QueryContext(ctx,
         `SELECT time, server_id, measurement, field, value_double, value_int, tags
          FROM metric_points
          WHERE server_id = $1 AND measurement = $2 AND field = $3
            AND time > now() - $4::interval AND tags @> $5::jsonb
-         ORDER BY time`,
-        serverID, measurement, field, rng, tagFilter,
+         ORDER BY time
+         LIMIT $6 OFFSET $7`,
+        serverID, measurement, field, rng, tagFilter, limit, offset,
     )
     if err != nil {
-        return nil, err
+        return nil, 0, err
     }
     defer rows.Close()
 
@@ -135,40 +172,53 @@ func (r *MetricsRepository) SeriesQuery(ctx context.Context, serverID, measureme
         var resp models.SeriesPointResponse
         var tagsRaw []byte
         if err := rows.Scan(&resp.Time, &resp.ServerID, &resp.Measurement, &resp.Field, &resp.ValueDouble, &resp.ValueInt, &tagsRaw); err != nil {
-            return nil, err
+            return nil, 0, err
         }
         var tags map[string]interface{}
         _ = json.Unmarshal(tagsRaw, &tags)
         resp.Tags = tags
         out = append(out, resp)
     }
-    return out, rows.Err()
+    if err := rows.Err(); err != nil {
+        return nil, 0, err
+    }
+    return out, total, nil
 }
 
-func (r *MetricsRepository) Servers(ctx context.Context, city, region string) ([]string, error) {
-    q := `SELECT DISTINCT server_id FROM server_metrics`
+func (r *MetricsRepository) buildServerFilter(city, region string) (string, []interface{}) {
     args := make([]interface{}, 0, 2)
-    where := ""
-
+    parts := make([]string, 0, 2)
     if city != "" {
         args = append(args, city)
-        where += " city = $" + fmt.Sprint(len(args))
+        parts = append(parts, fmt.Sprintf("city = $%d", len(args)))
     }
     if region != "" {
         args = append(args, region)
-        if where != "" {
-            where += " AND"
-        }
-        where += " region = $" + fmt.Sprint(len(args))
+        parts = append(parts, fmt.Sprintf("region = $%d", len(args)))
     }
-    if where != "" {
-        q += " WHERE" + where
-    }
-    q += " ORDER BY server_id"
 
-    rows, err := r.db.QueryContext(ctx, q, args...)
+    if len(parts) == 0 {
+        return "", args
+    }
+    return " WHERE " + strings.Join(parts, " AND "), args
+}
+
+func (r *MetricsRepository) Servers(ctx context.Context, city, region string, limit, offset int) ([]string, int, error) {
+    whereClause, args := r.buildServerFilter(city, region)
+
+    totalQuery := `SELECT COUNT(DISTINCT server_id) FROM server_metrics` + whereClause
+    total, err := r.countQuery(ctx, totalQuery, args...)
     if err != nil {
-        return nil, err
+        return nil, 0, err
+    }
+
+    args = append(args, limit, offset)
+    rows, err := r.db.QueryContext(ctx,
+        `SELECT DISTINCT server_id FROM server_metrics`+whereClause+fmt.Sprintf(" ORDER BY server_id LIMIT $%d OFFSET $%d", len(args)-1, len(args)),
+        args...,
+    )
+    if err != nil {
+        return nil, 0, err
     }
     defer rows.Close()
 
@@ -176,39 +226,37 @@ func (r *MetricsRepository) Servers(ctx context.Context, city, region string) ([
     for rows.Next() {
         var s string
         if err := rows.Scan(&s); err != nil {
-            return nil, err
+            return nil, 0, err
         }
         servers = append(servers, s)
     }
-    return servers, rows.Err()
+    if err := rows.Err(); err != nil {
+        return nil, 0, err
+    }
+    return servers, total, nil
 }
 
-func (r *MetricsRepository) ServerStatus(ctx context.Context, city, region string) ([]models.ServerStatus, error) {
-    q := `SELECT DISTINCT ON (server_id)
-            server_id, time, city, city_name, region, region_name
-          FROM server_metrics`
-    args := make([]interface{}, 0, 2)
-    where := ""
+func (r *MetricsRepository) ServerStatus(ctx context.Context, city, region string, limit, offset int) ([]models.ServerStatus, int, error) {
+    whereClause, args := r.buildServerFilter(city, region)
 
-    if city != "" {
-        args = append(args, city)
-        where += " city = $" + fmt.Sprint(len(args))
-    }
-    if region != "" {
-        args = append(args, region)
-        if where != "" {
-            where += " AND"
-        }
-        where += " region = $" + fmt.Sprint(len(args))
-    }
-    if where != "" {
-        q += " WHERE" + where
-    }
-    q += " ORDER BY server_id, time DESC"
-
-    rows, err := r.db.QueryContext(ctx, q, args...)
+    totalQuery := `SELECT COUNT(*) FROM (
+        SELECT DISTINCT ON (server_id) server_id
+        FROM server_metrics` + whereClause + `
+    ) sub`
+    total, err := r.countQuery(ctx, totalQuery, args...)
     if err != nil {
-        return nil, err
+        return nil, 0, err
+    }
+
+    args = append(args, limit, offset)
+    rows, err := r.db.QueryContext(ctx,
+        `SELECT DISTINCT ON (server_id)
+            server_id, time, city, city_name, region, region_name
+         FROM server_metrics`+whereClause+fmt.Sprintf(" ORDER BY server_id, time DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args)),
+        args...,
+    )
+    if err != nil {
+        return nil, 0, err
     }
     defer rows.Close()
 
@@ -217,16 +265,19 @@ func (r *MetricsRepository) ServerStatus(ctx context.Context, city, region strin
     for rows.Next() {
         var s models.ServerStatus
         if err := rows.Scan(&s.ServerID, &s.LastSeen, &s.City, &s.CityName, &s.Region, &s.RegionName); err != nil {
-            return nil, err
+            return nil, 0, err
         }
         age := now.Sub(s.LastSeen)
         s.AgeSeconds = int64(age.Seconds())
         out = append(out, s)
     }
-    return out, rows.Err()
+    if err := rows.Err(); err != nil {
+        return nil, 0, err
+    }
+    return out, total, nil
 }
 
-func (r *MetricsRepository) CityStatusSummary(ctx context.Context, region, threshold string) ([]models.CityStatusSummary, error) {
+func (r *MetricsRepository) CityStatusSummary(ctx context.Context, region, threshold string, limit, offset int) ([]models.CityStatusSummary, int, error) {
     q := `WITH latest AS (
             SELECT DISTINCT ON (server_id) server_id, time, city, city_name
             FROM server_metrics`
@@ -252,9 +303,16 @@ func (r *MetricsRepository) CityStatusSummary(ctx context.Context, region, thres
         GROUP BY 1
         ORDER BY 1`
 
-    rows, err := r.db.QueryContext(ctx, q, args...)
+    totalQuery := fmt.Sprintf(`SELECT COUNT(*) FROM (%s) summary`, q)
+    total, err := r.countQuery(ctx, totalQuery, args...)
     if err != nil {
-        return nil, err
+        return nil, 0, err
+    }
+
+    argsWithPage := append(append([]interface{}{}, args...), limit, offset)
+    rows, err := r.db.QueryContext(ctx, q+fmt.Sprintf("\n        LIMIT $%d OFFSET $%d", len(argsWithPage)-1, len(argsWithPage)), argsWithPage...)
+    if err != nil {
+        return nil, 0, err
     }
     defer rows.Close()
 
@@ -262,23 +320,32 @@ func (r *MetricsRepository) CityStatusSummary(ctx context.Context, region, thres
     for rows.Next() {
         var s models.CityStatusSummary
         if err := rows.Scan(&s.City, &s.CityName, &s.OnlineCount, &s.OfflineCount, &s.Total); err != nil {
-            return nil, err
+            return nil, 0, err
         }
         out = append(out, s)
     }
-    return out, rows.Err()
+    if err := rows.Err(); err != nil {
+        return nil, 0, err
+    }
+    return out, total, nil
 }
 
-func (r *MetricsRepository) LatestMetrics(ctx context.Context) ([]models.LatestMetric, error) {
+func (r *MetricsRepository) LatestMetrics(ctx context.Context, limit, offset int) ([]models.LatestMetric, int, error) {
+    total, err := r.countQuery(ctx, `SELECT COUNT(DISTINCT server_id) FROM server_metrics`)
+    if err != nil {
+        return nil, 0, err
+    }
+
     rows, err := r.db.QueryContext(ctx, `
         SELECT DISTINCT ON (server_id)
             server_id, time, cpu, memory, memory_total_bytes, memory_used_bytes,
             disk, disk_total_bytes, disk_used_bytes, disk_free_bytes,
             uptime, city, city_name, region, region_name
         FROM server_metrics
-        ORDER BY server_id, time DESC`)
+        ORDER BY server_id, time DESC
+        LIMIT $1 OFFSET $2`, limit, offset)
     if err != nil {
-        return nil, err
+        return nil, 0, err
     }
     defer rows.Close()
 
@@ -302,23 +369,36 @@ func (r *MetricsRepository) LatestMetrics(ctx context.Context) ([]models.LatestM
             &m.Region,
             &m.RegionName,
         ); err != nil {
-            return nil, err
+            return nil, 0, err
         }
         result = append(result, m)
     }
-    return result, rows.Err()
+    if err := rows.Err(); err != nil {
+        return nil, 0, err
+    }
+    return result, total, nil
 }
 
-func (r *MetricsRepository) HistoryMetrics(ctx context.Context, serverID, rng string) ([]models.HistoryMetric, error) {
+func (r *MetricsRepository) HistoryMetrics(ctx context.Context, serverID, rng string, limit, offset int) ([]models.HistoryMetric, int, error) {
+    total, err := r.countQuery(ctx, `
+        SELECT COUNT(*) FROM server_metrics
+        WHERE server_id = $1 AND time > now() - $2::interval`,
+        serverID, rng,
+    )
+    if err != nil {
+        return nil, 0, err
+    }
+
     rows, err := r.db.QueryContext(ctx, `
         SELECT time, cpu, memory, memory_total_bytes, memory_used_bytes,
                disk, disk_total_bytes, disk_used_bytes, disk_free_bytes,
                uptime, city, city_name, region, region_name
         FROM server_metrics
         WHERE server_id = $1 AND time > now() - $2::interval
-        ORDER BY time`, serverID, rng)
+        ORDER BY time
+        LIMIT $3 OFFSET $4`, serverID, rng, limit, offset)
     if err != nil {
-        return nil, err
+        return nil, 0, err
     }
     defer rows.Close()
 
@@ -341,9 +421,12 @@ func (r *MetricsRepository) HistoryMetrics(ctx context.Context, serverID, rng st
             &m.Region,
             &m.RegionName,
         ); err != nil {
-            return nil, err
+            return nil, 0, err
         }
         result = append(result, m)
     }
-    return result, rows.Err()
+    if err := rows.Err(); err != nil {
+        return nil, 0, err
+    }
+    return result, total, nil
 }

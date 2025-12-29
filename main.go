@@ -31,8 +31,10 @@ var (
 )
 
 const (
-	batchSize        = 1000 // flush immediately when queue grows
-	flushIntervalSec = 1    // flush at least every 1 second
+	defaultWriterBufferSize  = 20000
+	defaultWriterBatchSize   = 1000
+	defaultWriterFlushSec    = 1
+	defaultWriterWorkerCount = 2
 )
 
 func getEnv(key, fallback string) string {
@@ -125,17 +127,38 @@ func clientKey(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func metricWriter() {
-	ticker := time.NewTicker(time.Duration(flushIntervalSec) * time.Second)
+type metricWriterConfig struct {
+	batchSize  int
+	flushEvery time.Duration
+}
+
+func startMetricWriters(workers int, cfg metricWriterConfig) {
+	if workers <= 0 {
+		workers = 1
+	}
+	for i := 0; i < workers; i++ {
+		go metricWriter(cfg)
+	}
+}
+
+func metricWriter(cfg metricWriterConfig) {
+	if cfg.batchSize <= 0 {
+		cfg.batchSize = defaultWriterBatchSize
+	}
+	if cfg.flushEvery <= 0 {
+		cfg.flushEvery = time.Duration(defaultWriterFlushSec) * time.Second
+	}
+
+	ticker := time.NewTicker(cfg.flushEvery)
 	defer ticker.Stop()
 
-	buffer := make([]models.SeriesPoint, 0, batchSize)
+	buffer := make([]models.SeriesPoint, 0, cfg.batchSize)
 
 	for {
 		select {
 		case p := <-metricPointsChan:
 			buffer = append(buffer, p)
-			if len(buffer) >= batchSize {
+			if len(buffer) >= cfg.batchSize {
 				flushBatch(buffer)
 				buffer = buffer[:0]
 			}
@@ -223,6 +246,12 @@ func main() {
 
 	metricsRepo = repository.NewMetricsRepository(db)
 
+	writerBufferSize := getEnvInt("METRIC_POINTS_BUFFER", defaultWriterBufferSize)
+	if writerBufferSize <= 0 {
+		writerBufferSize = defaultWriterBufferSize
+	}
+	metricPointsChan = make(chan models.SeriesPoint, writerBufferSize)
+
 	// if err := runMigrations(db); err != nil {       // <-- ADD THIS LINE
 	// 	log.Fatal("SQL migrations failed:", err)
 	// }
@@ -234,21 +263,39 @@ func main() {
 	debug := getEnv("DEBUG", "") != ""
 	handler := handlers.NewMetricsHandler(metricsRepo, metricPointsChan, debug)
 
-	routes.Register(http.DefaultServeMux, rateLimitMiddleware, routes.Handlers{
-		Root:              handler.Root,
-		Ingest:            handler.Ingest,
-		Servers:           handler.Servers,
-		ServersStatus:     handler.ServersStatus,
-		ServersStatusCity: handler.ServersStatusCity,
-		MetricsLatest:     handler.Latest,
-		MetricsHistory:    handler.History,
-		SeriesList:        handler.SeriesList,
-		SeriesLatest:      handler.SeriesLatest,
-		SeriesQuery:       handler.SeriesQuery,
+	routes.Register(http.DefaultServeMux, nil, routes.Handlers{
+		Root:              rateLimitMiddleware(handler.Root),
+		Ingest:            handler.Ingest, // /api/metrics bypasses rate limiting
+		Servers:           rateLimitMiddleware(handler.Servers),
+		ServersStatus:     rateLimitMiddleware(handler.ServersStatus),
+		ServersStatusCity: rateLimitMiddleware(handler.ServersStatusCity),
+		MetricsLatest:     rateLimitMiddleware(handler.Latest),
+		MetricsHistory:    rateLimitMiddleware(handler.History),
+		SeriesList:        rateLimitMiddleware(handler.SeriesList),
+		SeriesLatest:      rateLimitMiddleware(handler.SeriesLatest),
+		SeriesQuery:       rateLimitMiddleware(handler.SeriesQuery),
 	})
 
-	metricPointsChan = make(chan models.SeriesPoint, 5000)
-	go metricWriter()
+	workerCount := getEnvInt("METRIC_POINTS_WORKERS", defaultWriterWorkerCount)
+	if workerCount <= 0 {
+		workerCount = defaultWriterWorkerCount
+	}
+	batchSize := getEnvInt("METRIC_POINTS_BATCH", defaultWriterBatchSize)
+	if batchSize <= 0 {
+		batchSize = defaultWriterBatchSize
+	}
+	flushSeconds := getEnvInt("METRIC_POINTS_FLUSH_SECONDS", defaultWriterFlushSec)
+	if flushSeconds <= 0 {
+		flushSeconds = defaultWriterFlushSec
+	}
+
+	writerCfg := metricWriterConfig{
+		batchSize:  batchSize,
+		flushEvery: time.Duration(flushSeconds) * time.Second,
+	}
+
+	log.Printf("metric writer: workers=%d batch=%d flush=%s buffer=%d", workerCount, batchSize, writerCfg.flushEvery, cap(metricPointsChan))
+	startMetricWriters(workerCount, writerCfg)
 	log.Println("Metrics API listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", withCORS(http.DefaultServeMux)))
 }

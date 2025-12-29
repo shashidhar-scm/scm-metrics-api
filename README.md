@@ -93,13 +93,20 @@ All routes are served on port `8080`.
 
 - `GET /api/servers`
   - Returns list of servers.
+  - Query params: `page`, `page_size` (default `25`, max `200`)
 
-- `GET /api/metrics/latest`
-  - Returns latest summary row per server.
+- `GET /api/servers/status`
+  - Returns online/offline status per server (threshold controls freshness).
+  - Query params: `page`, `page_size`.
+
+- `GET /api/servers/status/city?region=<region>&threshold=<interval>`
+  - Aggregates counts per city (online/offline/total).
+  - Query params: `page`, `page_size`.
 
 - `GET /api/metrics/history?server_id=<id>&range=<interval>`
   - Returns summary points for a server within a time range.
   - `range` examples: `10m`, `1h`, `6h`, `1d`.
+  - Supports `page`, `page_size`.
 
 ### Series endpoints (from `metric_points`)
 
@@ -107,6 +114,7 @@ These endpoints enable a dashboard to query a curated set of series.
 
 - `GET /api/series?server_id=<id>`
   - Lists available `(measurement, field)` pairs for that server.
+  - Query params: `page`, `page_size` (default `25`, max `200`)
 
 - `GET /api/series/latest?server_id=<id>&measurement=<m>&field=<f>&tags=<json>`
   - Returns the latest point for a series.
@@ -115,6 +123,7 @@ These endpoints enable a dashboard to query a curated set of series.
 - `GET /api/series/query?server_id=<id>&measurement=<m>&field=<f>&range=<interval>&tags=<json>`
   - Returns time-ordered points for a series in the requested range.
   - `tags` is optional JSON.
+  - Supports `page`, `page_size` pagination on the result set.
 
 #### Tag filter examples
 
