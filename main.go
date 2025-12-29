@@ -5,17 +5,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
-    "path/filepath"
 
 	_ "github.com/lib/pq"
 )
 
-var db *sql.DB
-var metricPointsChan chan SeriesPoint
+var (
+	db               *sql.DB
+	metricPointsChan chan SeriesPoint
+	limiter          *rateLimiter
+)
 
 const (
     batchSize        = 1000           // flush immediately when queue grows
@@ -28,6 +34,89 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
+	}
+	return fallback
+}
+
+type rateLimiter struct {
+	window  time.Duration
+	max     int
+	mu      sync.Mutex
+	clients map[string]*rateEntry
+}
+
+type rateEntry struct {
+	count   int
+	expires time.Time
+}
+
+func newRateLimiter(max int, window time.Duration) *rateLimiter {
+	if max <= 0 || window <= 0 {
+		return nil
+	}
+	return &rateLimiter{
+		window:  window,
+		max:     max,
+		clients: make(map[string]*rateEntry),
+	}
+}
+
+func (l *rateLimiter) Allow(key string) bool {
+	if l == nil {
+		return true
+	}
+	now := time.Now()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	entry, ok := l.clients[key]
+	if !ok || now.After(entry.expires) {
+		l.clients[key] = &rateEntry{count: 1, expires: now.Add(l.window)}
+		return true
+	}
+
+	if entry.count >= l.max {
+		return false
+	}
+
+	entry.count++
+	return true
+}
+
+func rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if limiter == nil {
+			next(w, r)
+			return
+		}
+
+		if !limiter.Allow(clientKey(r)) {
+			writeJSONError(w, http.StatusTooManyRequests, "rate limit exceeded")
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+func clientKey(r *http.Request) string {
+	if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
+		parts := strings.Split(xf, ",")
+		return strings.TrimSpace(parts[0])
+	}
+
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 func databaseURL() string {
@@ -715,7 +804,21 @@ func keysOf(m map[string]interface{}) []string {
 func saveMetric(m CleanMetric) {
 	_, err := db.Exec(
 		`INSERT INTO server_metrics(time, server_id, cpu, memory, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes, uptime, city, city_name, region, region_name)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		 ON CONFLICT (server_id, time) DO UPDATE
+		 SET cpu = EXCLUDED.cpu,
+		     memory = EXCLUDED.memory,
+		     memory_total_bytes = EXCLUDED.memory_total_bytes,
+		     memory_used_bytes = EXCLUDED.memory_used_bytes,
+		     disk = EXCLUDED.disk,
+		     disk_total_bytes = EXCLUDED.disk_total_bytes,
+		     disk_used_bytes = EXCLUDED.disk_used_bytes,
+		     disk_free_bytes = EXCLUDED.disk_free_bytes,
+		     uptime = EXCLUDED.uptime,
+		     city = EXCLUDED.city,
+		     city_name = EXCLUDED.city_name,
+		     region = EXCLUDED.region,
+		     region_name = EXCLUDED.region_name`,
 		m.Time, m.ServerID, m.CPU, m.Memory, m.MemoryTotalBytes, m.MemoryUsedBytes, m.Disk, m.DiskTotalBytes, m.DiskUsedBytes, m.DiskFreeBytes, m.Uptime, m.City, m.CityName, m.Region, m.RegionName,
 	)
 	if err != nil {
@@ -1078,16 +1181,20 @@ func main() {
 	// 	log.Fatal("SQL migrations failed:", err)
 	// }
 
-	http.HandleFunc("/", rootHandler)
-	http.HandleFunc("/api/metrics", ingestHandler)
-	http.HandleFunc("/api/servers", serversHandler)
-	http.HandleFunc("/api/servers/status", serversStatusHandler)
-	http.HandleFunc("/api/servers/status/city", serversStatusCityHandler)
-	http.HandleFunc("/api/metrics/latest", latestHandler)
-	http.HandleFunc("/api/metrics/history", historyHandler)
-	http.HandleFunc("/api/series", seriesListHandler)
-	http.HandleFunc("/api/series/latest", seriesLatestHandler)
-	http.HandleFunc("/api/series/query", seriesQueryHandler)
+	rateLimitWindow := time.Duration(getEnvInt("RATE_LIMIT_WINDOW_SECONDS", 60)) * time.Second
+	rateLimitMax := getEnvInt("RATE_LIMIT_MAX", 120)
+	limiter = newRateLimiter(rateLimitMax, rateLimitWindow)
+
+	http.HandleFunc("/", rateLimitMiddleware(rootHandler))
+	http.HandleFunc("/api/metrics", rateLimitMiddleware(ingestHandler))
+	http.HandleFunc("/api/servers", rateLimitMiddleware(serversHandler))
+	http.HandleFunc("/api/servers/status", rateLimitMiddleware(serversStatusHandler))
+	http.HandleFunc("/api/servers/status/city", rateLimitMiddleware(serversStatusCityHandler))
+	http.HandleFunc("/api/metrics/latest", rateLimitMiddleware(latestHandler))
+	http.HandleFunc("/api/metrics/history", rateLimitMiddleware(historyHandler))
+	http.HandleFunc("/api/series", rateLimitMiddleware(seriesListHandler))
+	http.HandleFunc("/api/series/latest", rateLimitMiddleware(seriesLatestHandler))
+	http.HandleFunc("/api/series/query", rateLimitMiddleware(seriesQueryHandler))
 
 	metricPointsChan = make(chan SeriesPoint, 5000)
 	go metricWriter()
