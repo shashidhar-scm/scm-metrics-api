@@ -16,6 +16,19 @@ It supports:
 
 The service auto-creates the DB and schema on startup.
 
+### Project structure
+
+```text
+internal/
+  db/           # Connection config + schema/bootstrap logic
+  models/       # All request/response + persistence structs
+  repository/   # MetricsRepository encapsulating DB access
+  handlers/     # MetricsHandler with HTTP endpoints
+  routes/       # Router helpers for wiring handlers + middleware
+```
+
+`main.go` now only wires together the DB setup, repository, handler, middleware, and routes, keeping business logic inside the packages above.
+
 ### Environment variables
 
 - `DATABASE_URL` (optional; if set, overrides all DB_* variables)
@@ -131,6 +144,15 @@ The ingest stores only a curated subset:
   - `total`, `used`, `free`, `used_percent` with tags `{"aggregated":true}`
 - `diskio` (all devices)
   - `read_bytes`, `write_bytes`, `io_util`, `io_await`
+
+## Rate limiting
+
+An IP-based sliding-window limiter wraps every HTTP handler. Configure via:
+
+- `RATE_LIMIT_WINDOW_SECONDS` (default `60`)
+- `RATE_LIMIT_MAX` (default `120`)
+
+Set either to `0` to disable the limiter.
 
 ## CORS
 
