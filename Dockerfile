@@ -21,6 +21,7 @@ COPY --from=builder /src/migrations /app/migrations
 
 ENV PORT=8080
 # ENV DEBUG=1
+ENV DIRECT_INSERT=1
 
 EXPOSE 8080
 

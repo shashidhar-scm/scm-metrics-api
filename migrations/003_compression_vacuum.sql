@@ -21,15 +21,6 @@ BEGIN
     ------------------------------------------------------------------------
     -- metric_points: raw high-resolution data
     ------------------------------------------------------------------------
-    -- Retain only latest 60 days
-    IF NOT EXISTS (
-        SELECT 1 FROM timescaledb_information.jobs
-        WHERE hypertable_name = 'metric_points'
-        AND proc_name = 'policy_retention'
-    ) THEN
-        PERFORM add_retention_policy('metric_points', INTERVAL '60 days');
-    END IF;
-
     -- Compress chunks older than 7 days
     IF NOT EXISTS (
         SELECT 1 FROM timescaledb_information.jobs
@@ -43,15 +34,6 @@ BEGIN
     ------------------------------------------------------------------------
     -- server_metrics: rollup data
     ------------------------------------------------------------------------
-    -- Retain 365 days
-    IF NOT EXISTS (
-        SELECT 1 FROM timescaledb_information.jobs
-        WHERE hypertable_name = 'server_metrics'
-        AND proc_name = 'policy_retention'
-    ) THEN
-        PERFORM add_retention_policy('server_metrics', INTERVAL '365 days');
-    END IF;
-
     -- Compress chunks older than 14 days
     IF NOT EXISTS (
         SELECT 1 FROM timescaledb_information.jobs

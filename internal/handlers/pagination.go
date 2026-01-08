@@ -6,15 +6,17 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 var errInvalidPagination = errors.New("invalid pagination parameters")
 
 type paginationParams struct {
-	page     int
-	pageSize int
-	limit    int
-	offset   int
+	page          int
+	pageSize      int
+	limit         int
+	offset        int
+	includeTotals bool
 }
 
 type paginationPayload struct {
@@ -49,29 +51,39 @@ func parsePaginationParams(r *http.Request, defaultPageSize, maxPageSize int) (p
 		pageSize = maxPageSize
 	}
 
+	includeTotals := false
+	switch strings.ToLower(q.Get("include_totals")) {
+	case "1", "true", "yes":
+		includeTotals = true
+	}
+
 	offset := (page - 1) * pageSize
 	return paginationParams{
-		page:     page,
-		pageSize: pageSize,
-		limit:    pageSize,
-		offset:   offset,
+		page:          page,
+		pageSize:      pageSize,
+		limit:         pageSize,
+		offset:        offset,
+		includeTotals: includeTotals,
 	}, nil
 }
 
-func writePaginatedResponse(w http.ResponseWriter, status int, data interface{}, page, pageSize, total int) {
+func writePaginatedResponse(w http.ResponseWriter, status int, data interface{}, page, pageSize, total int, includeTotals bool) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	payload := map[string]interface{}{
 		"data":       data,
-		"pagination": buildPaginationPayload(page, pageSize, total),
+		"pagination": buildPaginationPayload(page, pageSize, total, includeTotals),
 	}
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func buildPaginationPayload(page, pageSize, total int) paginationPayload {
+func buildPaginationPayload(page, pageSize, total int, includeTotals bool) paginationPayload {
 	totalPages := 0
-	if pageSize > 0 {
+	if includeTotals && pageSize > 0 {
 		totalPages = int(math.Ceil(float64(total) / float64(pageSize)))
+	} else if !includeTotals {
+		total = -1
+		totalPages = -1
 	}
 	return paginationPayload{
 		Page:       page,

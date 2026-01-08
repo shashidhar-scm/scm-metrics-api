@@ -20,13 +20,15 @@ type MetricsHandler struct {
 	repo           *repository.MetricsRepository
 	metricPoints   chan models.SeriesPoint
 	debugLoggingOn bool
+	directInsert   bool
 }
 
-func NewMetricsHandler(repo *repository.MetricsRepository, metricPoints chan models.SeriesPoint, debug bool) *MetricsHandler {
+func NewMetricsHandler(repo *repository.MetricsRepository, metricPoints chan models.SeriesPoint, debug bool, directInsert bool) *MetricsHandler {
 	return &MetricsHandler{
 		repo:           repo,
 		metricPoints:   metricPoints,
 		debugLoggingOn: debug,
+		directInsert:   directInsert,
 	}
 }
 
@@ -212,11 +214,20 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, p := range points {
-		if p.ServerID == "" {
-			continue
+	if len(points) > 0 {
+		if h.directInsert || h.metricPoints == nil {
+			if err := h.repo.SaveSeriesPoints(r.Context(), points); err != nil {
+				WriteJSONError(w, http.StatusInternalServerError, "failed to persist series points: "+err.Error())
+				return
+			}
+		} else {
+			for _, p := range points {
+				if p.ServerID == "" {
+					continue
+				}
+				h.metricPoints <- p
+			}
 		}
-		h.metricPoints <- p
 	}
 
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -235,13 +246,13 @@ func (h *MetricsHandler) SeriesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, total, err := h.repo.ListSeriesMeta(r.Context(), serverID, p.limit, p.offset)
+	items, total, err := h.repo.ListSeriesMeta(r.Context(), serverID, p.limit, p.offset, p.includeTotals)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, items, p.page, p.pageSize, total)
+	writePaginatedResponse(w, http.StatusOK, items, p.page, p.pageSize, total, p.includeTotals)
 }
 
 func (h *MetricsHandler) SeriesLatest(w http.ResponseWriter, r *http.Request) {
@@ -292,13 +303,13 @@ func (h *MetricsHandler) SeriesQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, total, err := h.repo.SeriesQuery(r.Context(), serverID, measurement, field, rng, tagFilter, p.limit, p.offset)
+	out, total, err := h.repo.SeriesQuery(r.Context(), serverID, measurement, field, rng, tagFilter, p.limit, p.offset, p.includeTotals)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, out, p.page, p.pageSize, total)
+	writePaginatedResponse(w, http.StatusOK, out, p.page, p.pageSize, total, p.includeTotals)
 }
 
 func (h *MetricsHandler) Servers(w http.ResponseWriter, r *http.Request) {
@@ -311,13 +322,13 @@ func (h *MetricsHandler) Servers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	servers, total, err := h.repo.Servers(r.Context(), city, region, p.limit, p.offset)
+	servers, total, err := h.repo.Servers(r.Context(), city, region, p.limit, p.offset, p.includeTotals)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, servers, p.page, p.pageSize, total)
+	writePaginatedResponse(w, http.StatusOK, servers, p.page, p.pageSize, total, p.includeTotals)
 }
 
 func (h *MetricsHandler) ServersStatus(w http.ResponseWriter, r *http.Request) {
@@ -340,7 +351,7 @@ func (h *MetricsHandler) ServersStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	statuses, total, err := h.repo.ServerStatus(r.Context(), city, region, p.limit, p.offset)
+	statuses, total, err := h.repo.ServerStatus(r.Context(), city, region, p.limit, p.offset, p.includeTotals)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -351,7 +362,7 @@ func (h *MetricsHandler) ServersStatus(w http.ResponseWriter, r *http.Request) {
 		statuses[i].Online = age <= threshold
 	}
 
-	writePaginatedResponse(w, http.StatusOK, statuses, p.page, p.pageSize, total)
+	writePaginatedResponse(w, http.StatusOK, statuses, p.page, p.pageSize, total, p.includeTotals)
 }
 
 func (h *MetricsHandler) ServersStatusCity(w http.ResponseWriter, r *http.Request) {
@@ -372,13 +383,13 @@ func (h *MetricsHandler) ServersStatusCity(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	items, total, err := h.repo.CityStatusSummary(r.Context(), region, thresholdStr, p.limit, p.offset)
+	items, total, err := h.repo.CityStatusSummary(r.Context(), region, thresholdStr, p.limit, p.offset, p.includeTotals)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, items, p.page, p.pageSize, total)
+	writePaginatedResponse(w, http.StatusOK, items, p.page, p.pageSize, total, p.includeTotals)
 }
 
 func (h *MetricsHandler) Latest(w http.ResponseWriter, r *http.Request) {
@@ -388,13 +399,13 @@ func (h *MetricsHandler) Latest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, total, err := h.repo.LatestMetrics(r.Context(), p.limit, p.offset)
+	result, total, err := h.repo.LatestMetrics(r.Context(), p.limit, p.offset, p.includeTotals)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, result, p.page, p.pageSize, total)
+	writePaginatedResponse(w, http.StatusOK, result, p.page, p.pageSize, total, p.includeTotals)
 }
 
 func (h *MetricsHandler) History(w http.ResponseWriter, r *http.Request) {
@@ -415,13 +426,13 @@ func (h *MetricsHandler) History(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, total, err := h.repo.HistoryMetrics(r.Context(), serverID, rng, p.limit, p.offset)
+	result, total, err := h.repo.HistoryMetrics(r.Context(), serverID, rng, p.limit, p.offset, p.includeTotals)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, result, p.page, p.pageSize, total)
+	writePaginatedResponse(w, http.StatusOK, result, p.page, p.pageSize, total, p.includeTotals)
 }
 
 func WriteJSONError(w http.ResponseWriter, status int, message string) {
