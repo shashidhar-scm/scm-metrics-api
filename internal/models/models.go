@@ -18,8 +18,11 @@ type CleanMetric struct {
 	CPU                float64
 	Memory             float64
 	Temperature        float64
+	ChassisTemperature float64
+	HotspotTemperature float64
 	SoundVolumePercent int64
 	SoundMuted         bool
+	FanRPM             int64
 	MemoryTotalBytes   int64
 	MemoryUsedBytes    int64
 	Disk               float64
@@ -46,8 +49,11 @@ type LatestMetric struct {
 	CPU                float64   `json:"cpu"`
 	Memory             float64   `json:"memory"`
 	Temperature        float64   `json:"temperature"`
+	ChassisTemperature float64   `json:"chassis_temp_c"`
+	HotspotTemperature float64   `json:"hotspot_temp_c"`
 	SoundVolumePercent int64     `json:"sound_volume_percent"`
 	SoundMuted         bool      `json:"sound_muted"`
+	FanRPM             int64     `json:"fan_rpm"`
 	MemoryTotalBytes   int64     `json:"memory_total_bytes"`
 	MemoryUsedBytes    int64     `json:"memory_used_bytes"`
 	Disk               float64   `json:"disk"`
@@ -72,8 +78,11 @@ type HistoryMetric struct {
 	CPU                float64   `json:"cpu"`
 	Memory             float64   `json:"memory"`
 	Temperature        float64   `json:"temperature"`
+	ChassisTemperature float64   `json:"chassis_temp_c"`
+	HotspotTemperature float64   `json:"hotspot_temp_c"`
 	SoundVolumePercent int64     `json:"sound_volume_percent"`
 	SoundMuted         bool      `json:"sound_muted"`
+	FanRPM             int64     `json:"fan_rpm"`
 	MemoryTotalBytes   int64     `json:"memory_total_bytes"`
 	MemoryUsedBytes    int64     `json:"memory_used_bytes"`
 	Disk               float64   `json:"disk"`

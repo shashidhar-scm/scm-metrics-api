@@ -69,7 +69,10 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	var netBytesSent int64
 	var netBytesRecv int64
 	var temperatureCaptured bool
+	var chassisTemperatureCaptured bool
+	var fanCaptured bool
 	var volumeCaptured bool
+	var hotspotCaptured bool
 	var dailyVnstatCaptured bool
 	var monthlyVnstatCaptured bool
 	var sawTemperatureMetric bool
@@ -116,6 +119,20 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 			if cm.CPU == 0 {
 				if v, ok := m.Fields["usage_idle"].(float64); ok {
 					cm.CPU = 100 - v
+				}
+			}
+
+		case "kiosk_hotspot":
+			if hotspotCaptured {
+				continue
+			}
+			if tempRaw, ok := m.Fields["temp_c"]; ok {
+				if tempVal, ok := toFloat64(tempRaw); ok {
+					cm.HotspotTemperature = tempVal
+					hotspotCaptured = true
+					points = append(points,
+						models.SeriesPoint{Time: ptTime, ServerID: cm.ServerID, Measurement: "kiosk_hotspot", Field: "temp_c", ValueDouble: &tempVal, TagsJSON: mustJSON(m.Tags)},
+					)
 				}
 			}
 
@@ -242,6 +259,34 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 				)
 			}
 
+		case "kiosk_chassis":
+			if chassisTemperatureCaptured {
+				continue
+			}
+			if tempRaw, ok := m.Fields["temp_c"]; ok {
+				if tempVal, ok := toFloat64(tempRaw); ok {
+					cm.ChassisTemperature = tempVal
+					chassisTemperatureCaptured = true
+					points = append(points,
+						models.SeriesPoint{Time: ptTime, ServerID: cm.ServerID, Measurement: "kiosk_chassis", Field: "temp_c", ValueDouble: &tempVal, TagsJSON: mustJSON(m.Tags)},
+					)
+				}
+			}
+
+		case "kiosk_fan":
+			if fanCaptured {
+				continue
+			}
+			if rpmRaw, ok := m.Fields["rpm"]; ok {
+				if rpmVal, ok := toInt64(rpmRaw); ok {
+					cm.FanRPM = rpmVal
+					fanCaptured = true
+					points = append(points,
+						models.SeriesPoint{Time: ptTime, ServerID: cm.ServerID, Measurement: "kiosk_fan", Field: "rpm", ValueInt: &rpmVal, TagsJSON: mustJSON(m.Tags)},
+					)
+				}
+			}
+
 		case "vnstat_daily":
 			if dailyVnstatCaptured {
 				continue
@@ -349,9 +394,9 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.debugLoggingOn {
-		log.Printf("ingest: parsed server_id=%s time=%s cpu=%.4f memory=%.4f temperature=%.2f volume_percent=%d memory_total_bytes=%d memory_used_bytes=%d disk=%.4f disk_total_bytes=%d disk_used_bytes=%d disk_free_bytes=%d net_bytes_sent=%d net_bytes_recv=%d",
+		log.Printf("ingest: parsed server_id=%s time=%s cpu=%.4f memory=%.4f temperature=%.2f chassis_temp=%.2f hotspot_temp=%.2f fan_rpm=%d volume_percent=%d muted=%t memory_total_bytes=%d memory_used_bytes=%d disk=%.4f disk_total_bytes=%d disk_used_bytes=%d disk_free_bytes=%d net_bytes_sent=%d net_bytes_recv=%d",
 			cm.ServerID, cm.Time.UTC().Format(time.RFC3339), cm.CPU, cm.Memory,
-			cm.Temperature, cm.SoundVolumePercent, cm.MemoryTotalBytes, cm.MemoryUsedBytes, cm.Disk, cm.DiskTotalBytes, cm.DiskUsedBytes, cm.DiskFreeBytes, cm.NetBytesSent, cm.NetBytesRecv)
+			cm.Temperature, cm.ChassisTemperature, cm.HotspotTemperature, cm.FanRPM, cm.SoundVolumePercent, cm.SoundMuted, cm.MemoryTotalBytes, cm.MemoryUsedBytes, cm.Disk, cm.DiskTotalBytes, cm.DiskUsedBytes, cm.DiskFreeBytes, cm.NetBytesSent, cm.NetBytesRecv)
 
 		if !sawTemperatureMetric {
 			log.Printf("ingest: temperature measurement missing for server_id=%s", cm.ServerID)
@@ -703,6 +748,50 @@ func extractTemperature(fields map[string]interface{}) (float64, bool) {
 		}
 	}
 
+	return 0, false
+}
+
+func toFloat64(val interface{}) (float64, bool) {
+	switch v := val.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f, true
+		}
+	case string:
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f, true
+		}
+	}
+	return 0, false
+}
+
+func toInt64(val interface{}) (int64, bool) {
+	switch v := val.(type) {
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	case float32:
+		return int64(v), true
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return i, true
+		}
+	case string:
+		if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return i, true
+		}
+	}
 	return 0, false
 }
 
