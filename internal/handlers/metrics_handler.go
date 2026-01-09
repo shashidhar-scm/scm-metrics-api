@@ -282,8 +282,22 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 				}
 				if volumeCaptured {
 					val := cm.SoundVolumePercent
+					if mutedVal, ok := m.Fields["muted"].(float64); ok {
+						cm.SoundMuted = mutedVal != 0
+					} else if mutedNum, ok := m.Fields["muted"].(json.Number); ok {
+						if vi, err := mutedNum.Int64(); err == nil {
+							cm.SoundMuted = vi != 0
+						}
+					}
 					points = append(points,
 						models.SeriesPoint{Time: ptTime, ServerID: cm.ServerID, Measurement: "kiosk_volume", Field: "level_percent", ValueInt: &val, TagsJSON: mustJSON(m.Tags)},
+					)
+					mutedInt := int64(0)
+					if cm.SoundMuted {
+						mutedInt = 1
+					}
+					points = append(points,
+						models.SeriesPoint{Time: ptTime, ServerID: cm.ServerID, Measurement: "kiosk_volume", Field: "muted", ValueInt: &mutedInt, TagsJSON: mustJSON(m.Tags)},
 					)
 				}
 			}

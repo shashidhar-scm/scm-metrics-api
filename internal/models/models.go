@@ -19,6 +19,7 @@ type CleanMetric struct {
 	Memory             float64
 	Temperature        float64
 	SoundVolumePercent int64
+	SoundMuted         bool
 	MemoryTotalBytes   int64
 	MemoryUsedBytes    int64
 	Disk               float64
@@ -46,6 +47,7 @@ type LatestMetric struct {
 	Memory             float64   `json:"memory"`
 	Temperature        float64   `json:"temperature"`
 	SoundVolumePercent int64     `json:"sound_volume_percent"`
+	SoundMuted         bool      `json:"sound_muted"`
 	MemoryTotalBytes   int64     `json:"memory_total_bytes"`
 	MemoryUsedBytes    int64     `json:"memory_used_bytes"`
 	Disk               float64   `json:"disk"`
@@ -71,6 +73,7 @@ type HistoryMetric struct {
 	Memory             float64   `json:"memory"`
 	Temperature        float64   `json:"temperature"`
 	SoundVolumePercent int64     `json:"sound_volume_percent"`
+	SoundMuted         bool      `json:"sound_muted"`
 	MemoryTotalBytes   int64     `json:"memory_total_bytes"`
 	MemoryUsedBytes    int64     `json:"memory_used_bytes"`
 	Disk               float64   `json:"disk"`
