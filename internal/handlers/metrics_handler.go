@@ -69,6 +69,7 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	var netBytesSent int64
 	var netBytesRecv int64
 	var temperatureCaptured bool
+	var volumeCaptured bool
 	var dailyVnstatCaptured bool
 	var monthlyVnstatCaptured bool
 	var sawTemperatureMetric bool
@@ -261,6 +262,32 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 				)
 			}
 
+		case "kiosk_volume":
+			if volumeCaptured {
+				continue
+			}
+			if v, ok := m.Fields["level_percent"]; ok {
+				switch vv := v.(type) {
+				case float64:
+					cm.SoundVolumePercent = int64(vv)
+					volumeCaptured = true
+				case int64:
+					cm.SoundVolumePercent = vv
+					volumeCaptured = true
+				case json.Number:
+					if vi, err := vv.Int64(); err == nil {
+						cm.SoundVolumePercent = vi
+						volumeCaptured = true
+					}
+				}
+				if volumeCaptured {
+					val := cm.SoundVolumePercent
+					points = append(points,
+						models.SeriesPoint{Time: ptTime, ServerID: cm.ServerID, Measurement: "kiosk_volume", Field: "level_percent", ValueInt: &val, TagsJSON: mustJSON(m.Tags)},
+					)
+				}
+			}
+
 		case "vnstat_monthly":
 			if monthlyVnstatCaptured {
 				continue
@@ -308,9 +335,9 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.debugLoggingOn {
-		log.Printf("ingest: parsed server_id=%s time=%s cpu=%.4f memory=%.4f temperature=%.2f memory_total_bytes=%d memory_used_bytes=%d disk=%.4f disk_total_bytes=%d disk_used_bytes=%d disk_free_bytes=%d net_bytes_sent=%d net_bytes_recv=%d",
+		log.Printf("ingest: parsed server_id=%s time=%s cpu=%.4f memory=%.4f temperature=%.2f volume_percent=%d memory_total_bytes=%d memory_used_bytes=%d disk=%.4f disk_total_bytes=%d disk_used_bytes=%d disk_free_bytes=%d net_bytes_sent=%d net_bytes_recv=%d",
 			cm.ServerID, cm.Time.UTC().Format(time.RFC3339), cm.CPU, cm.Memory,
-			cm.Temperature, cm.MemoryTotalBytes, cm.MemoryUsedBytes, cm.Disk, cm.DiskTotalBytes, cm.DiskUsedBytes, cm.DiskFreeBytes, cm.NetBytesSent, cm.NetBytesRecv)
+			cm.Temperature, cm.SoundVolumePercent, cm.MemoryTotalBytes, cm.MemoryUsedBytes, cm.Disk, cm.DiskTotalBytes, cm.DiskUsedBytes, cm.DiskFreeBytes, cm.NetBytesSent, cm.NetBytesRecv)
 
 		if !sawTemperatureMetric {
 			log.Printf("ingest: temperature measurement missing for server_id=%s", cm.ServerID)
@@ -611,6 +638,16 @@ func seriesPointFloatValue(t time.Time, serverID, measurement, field string, val
 	vv := value
 	jb, _ := json.Marshal(tags)
 	return models.SeriesPoint{Time: t, ServerID: serverID, Measurement: measurement, Field: field, ValueDouble: &vv, TagsJSON: jb}
+}
+
+func mustJSON(tags map[string]string) []byte {
+	if tags == nil {
+		return []byte(`{}`)
+	}
+	if jb, err := json.Marshal(tags); err == nil {
+		return jb
+	}
+	return []byte(`{}`)
 }
 
 func extractTemperature(fields map[string]interface{}) (float64, bool) {

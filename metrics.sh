@@ -66,6 +66,20 @@ install_sensors_prereqs() {
 install_sensors_prereqs
 
 # ------------------------------------------------------------
+# Ensure audio tooling for volume readings
+# ------------------------------------------------------------
+ensure_audio_utils() {
+  if dpkg -s alsa-utils >/dev/null 2>&1; then
+    echo "✔ alsa-utils already installed"
+  else
+    echo "▶ Installing alsa-utils (for amixer)..."
+    sudo apt install -y alsa-utils
+  fi
+}
+
+ensure_audio_utils
+
+# ------------------------------------------------------------
 # Install vnStat + jq for daily network totals
 # ------------------------------------------------------------
 install_vnstat_stack() {
@@ -172,6 +186,40 @@ EOF
 sudo chmod +x /usr/local/bin/vnstat_daily.sh
 
 # ------------------------------------------------------------
+# Helper script for audio volume
+# ------------------------------------------------------------
+echo "▶️ Installing volume helper script..."
+sudo tee /usr/local/bin/volume_level.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+CHANNEL="${1:-Master}"
+
+RAW="$(amixer get "$CHANNEL" 2>/dev/null | awk -F'[][]' '/Mono: Playback|Front Left: Playback|Front Right: Playback/ {print $2; exit}')"
+if [[ -z "$RAW" ]]; then
+  RAW="0%"
+fi
+VALUE="${RAW%%%}"
+
+if [[ -z "$VALUE" ]]; then
+  VALUE="0"
+fi
+
+printf 'kiosk_volume,channel=%s level_percent=%di\n' "$CHANNEL" "$VALUE"
+EOF
+sudo chmod +x /usr/local/bin/volume_level.sh
+
+# ------------------------------------------------------------
+# Ensure telegraf user can access ALSA devices
+# ------------------------------------------------------------
+if id telegraf >/dev/null 2>&1; then
+  echo "▶️ Adding telegraf user to audio group (safe if already a member)"
+  sudo usermod -a -G audio telegraf || true
+else
+  echo "⚠ telegraf user not found, skipping audio group assignment"
+fi
+
+# ------------------------------------------------------------
 # Enforce 60s collection + flush
 # ------------------------------------------------------------
 echo "▶️ Enforcing 60s agent interval..."
@@ -223,6 +271,13 @@ EOF
 sudo tee "$CONF_DIR/inputs-vnstat.conf" >/dev/null <<'EOF'
 [[inputs.exec]]
   commands = ["/usr/local/bin/vnstat_daily.sh"]
+  timeout = "5s"
+  data_format = "influx"
+EOF
+
+sudo tee "$CONF_DIR/inputs-volume.conf" >/dev/null <<'EOF'
+[[inputs.exec]]
+  commands = ["/usr/local/bin/volume_level.sh"]
   timeout = "5s"
   data_format = "influx"
 EOF
