@@ -129,7 +129,7 @@ func ensureDatabaseExists(cfg Config) error {
 }
 
 func ensureSchema(conn *sql.DB) error {
-	if _, err := conn.Exec("CREATE TABLE IF NOT EXISTS server_metrics (time TIMESTAMPTZ NOT NULL, server_id TEXT NOT NULL, cpu DOUBLE PRECISION NOT NULL DEFAULT 0, memory DOUBLE PRECISION NOT NULL DEFAULT 0, memory_total_bytes BIGINT NOT NULL DEFAULT 0, memory_used_bytes BIGINT NOT NULL DEFAULT 0, disk DOUBLE PRECISION NOT NULL DEFAULT 0, disk_total_bytes BIGINT NOT NULL DEFAULT 0, disk_used_bytes BIGINT NOT NULL DEFAULT 0, disk_free_bytes BIGINT NOT NULL DEFAULT 0, uptime BIGINT NOT NULL DEFAULT 0, city TEXT, city_name TEXT, region TEXT, region_name TEXT)"); err != nil {
+	if _, err := conn.Exec("CREATE TABLE IF NOT EXISTS server_metrics (time TIMESTAMPTZ NOT NULL, server_id TEXT NOT NULL, cpu DOUBLE PRECISION NOT NULL DEFAULT 0, memory DOUBLE PRECISION NOT NULL DEFAULT 0, temperature DOUBLE PRECISION NOT NULL DEFAULT 0, memory_total_bytes BIGINT NOT NULL DEFAULT 0, memory_used_bytes BIGINT NOT NULL DEFAULT 0, disk DOUBLE PRECISION NOT NULL DEFAULT 0, disk_total_bytes BIGINT NOT NULL DEFAULT 0, disk_used_bytes BIGINT NOT NULL DEFAULT 0, disk_free_bytes BIGINT NOT NULL DEFAULT 0, net_bytes_sent BIGINT NOT NULL DEFAULT 0, net_bytes_recv BIGINT NOT NULL DEFAULT 0, net_daily_rx_bytes BIGINT NOT NULL DEFAULT 0, net_daily_tx_bytes BIGINT NOT NULL DEFAULT 0, net_monthly_rx_bytes BIGINT NOT NULL DEFAULT 0, net_monthly_tx_bytes BIGINT NOT NULL DEFAULT 0, uptime BIGINT NOT NULL DEFAULT 0, city TEXT, city_name TEXT, region TEXT, region_name TEXT)"); err != nil {
 		return err
 	}
 	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS memory_total_bytes BIGINT NOT NULL DEFAULT 0"); err != nil {
@@ -145,6 +145,27 @@ func ensureSchema(conn *sql.DB) error {
 		return err
 	}
 	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS disk_free_bytes BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS temperature DOUBLE PRECISION NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS net_bytes_sent BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS net_bytes_recv BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS net_daily_rx_bytes BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS net_daily_tx_bytes BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS net_monthly_rx_bytes BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS net_monthly_tx_bytes BIGINT NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS uptime BIGINT NOT NULL DEFAULT 0"); err != nil {
@@ -166,6 +187,9 @@ func ensureSchema(conn *sql.DB) error {
 		return err
 	}
 	if _, err := conn.Exec("CREATE INDEX IF NOT EXISTS idx_server_metrics_time ON server_metrics (time DESC)"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("CREATE INDEX IF NOT EXISTS idx_server_metrics_region_server_id_time_desc ON server_metrics (region, server_id, time DESC)"); err != nil {
 		return err
 	}
 

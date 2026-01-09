@@ -17,12 +17,19 @@ type CleanMetric struct {
 	ServerID         string
 	CPU              float64
 	Memory           float64
+	Temperature      float64
 	MemoryTotalBytes int64
 	MemoryUsedBytes  int64
 	Disk             float64
 	DiskTotalBytes   int64
 	DiskUsedBytes    int64
 	DiskFreeBytes    int64
+	NetBytesSent     int64
+	NetBytesRecv     int64
+	NetDailyRxBytes  int64
+	NetDailyTxBytes  int64
+	NetMonthlyRxBytes int64
+	NetMonthlyTxBytes int64
 	Uptime           int64
 	City             string
 	CityName         string
@@ -36,12 +43,19 @@ type LatestMetric struct {
 	Time             time.Time `json:"time"`
 	CPU              float64   `json:"cpu"`
 	Memory           float64   `json:"memory"`
+	Temperature      float64   `json:"temperature"`
 	MemoryTotalBytes int64     `json:"memory_total_bytes"`
 	MemoryUsedBytes  int64     `json:"memory_used_bytes"`
 	Disk             float64   `json:"disk"`
 	DiskTotalBytes   int64     `json:"disk_total_bytes"`
 	DiskUsedBytes    int64     `json:"disk_used_bytes"`
 	DiskFreeBytes    int64     `json:"disk_free_bytes"`
+	NetBytesSent     int64     `json:"net_bytes_sent"`
+	NetBytesRecv     int64     `json:"net_bytes_recv"`
+	NetDailyRxBytes  int64     `json:"net_daily_rx_bytes"`
+	NetDailyTxBytes  int64     `json:"net_daily_tx_bytes"`
+	NetMonthlyRxBytes int64    `json:"net_monthly_rx_bytes"`
+	NetMonthlyTxBytes int64    `json:"net_monthly_tx_bytes"`
 	Uptime           int64     `json:"uptime"`
 	City             string    `json:"city"`
 	CityName         string    `json:"city_name"`
@@ -53,12 +67,19 @@ type HistoryMetric struct {
 	Time             time.Time `json:"time"`
 	CPU              float64   `json:"cpu"`
 	Memory           float64   `json:"memory"`
+	Temperature      float64   `json:"temperature"`
 	MemoryTotalBytes int64     `json:"memory_total_bytes"`
 	MemoryUsedBytes  int64     `json:"memory_used_bytes"`
 	Disk             float64   `json:"disk"`
 	DiskTotalBytes   int64     `json:"disk_total_bytes"`
 	DiskUsedBytes    int64     `json:"disk_used_bytes"`
 	DiskFreeBytes    int64     `json:"disk_free_bytes"`
+	NetBytesSent     int64     `json:"net_bytes_sent"`
+	NetBytesRecv     int64     `json:"net_bytes_recv"`
+	NetDailyRxBytes  int64     `json:"net_daily_rx_bytes"`
+	NetDailyTxBytes  int64     `json:"net_daily_tx_bytes"`
+	NetMonthlyRxBytes int64    `json:"net_monthly_rx_bytes"`
+	NetMonthlyTxBytes int64    `json:"net_monthly_tx_bytes"`
 	Uptime           int64     `json:"uptime"`
 	City             string    `json:"city"`
 	CityName         string    `json:"city_name"`

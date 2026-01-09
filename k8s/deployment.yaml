@@ -17,6 +17,8 @@ data:
   CORS_ALLOWED_ORIGINS: "https://scm-ads.citypost.us,http://localhost:4200,https://pivotal-cms.web.app"
   RATE_LIMIT_WINDOW_SECONDS: "60"
   RATE_LIMIT_MAX: "50"
+  DEBUG: "true"
+  LOG_PAYLOAD: "true"
 kind: ConfigMap
 metadata:
   name: scm-metrics-api
@@ -43,7 +45,7 @@ spec:
     spec:
       containers:
       - name: scm-metrics-api
-        image: smartcitymedia/scm-metrics-api:0.0.27
+        image: smartcitymedia/scm-metrics-api:0.0.42
         envFrom:
           - configMapRef:
               name: scm-metrics-api

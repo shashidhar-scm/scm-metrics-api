@@ -25,6 +25,9 @@ CREATE INDEX IF NOT EXISTS idx_server_metrics_server_id_time_desc
 CREATE INDEX IF NOT EXISTS idx_server_metrics_time
   ON server_metrics (time DESC);
 
+CREATE INDEX IF NOT EXISTS idx_server_metrics_region_server_id_time_desc
+  ON server_metrics (region, server_id, time DESC);
+
 SELECT create_hypertable('server_metrics', 'time', if_not_exists => TRUE);
 
 -- Metric points (raw)

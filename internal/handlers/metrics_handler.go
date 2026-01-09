@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,14 +22,16 @@ type MetricsHandler struct {
 	metricPoints   chan models.SeriesPoint
 	debugLoggingOn bool
 	directInsert   bool
+	logPayload     bool
 }
 
-func NewMetricsHandler(repo *repository.MetricsRepository, metricPoints chan models.SeriesPoint, debug bool, directInsert bool) *MetricsHandler {
+func NewMetricsHandler(repo *repository.MetricsRepository, metricPoints chan models.SeriesPoint, debug bool, directInsert bool, logPayload bool) *MetricsHandler {
 	return &MetricsHandler{
 		repo:           repo,
 		metricPoints:   metricPoints,
 		debugLoggingOn: debug,
 		directInsert:   directInsert,
+		logPayload:     logPayload,
 	}
 }
 
@@ -49,12 +52,27 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		log.Printf("ingest: received %d metrics", len(payload.Metrics))
 	}
 
+	if h.logPayload {
+		if b, err := json.Marshal(payload); err == nil {
+			log.Printf("ingest_payload: %s", string(b))
+		} else {
+			log.Printf("ingest_payload_error: %v", err)
+		}
+	}
+
 	var cm models.CleanMetric
 	var points []models.SeriesPoint
 
 	var diskTotalBytes int64
 	var diskUsedBytes int64
 	var diskFreeBytes int64
+	var netBytesSent int64
+	var netBytesRecv int64
+	var temperatureCaptured bool
+	var dailyVnstatCaptured bool
+	var monthlyVnstatCaptured bool
+	var sawTemperatureMetric bool
+	var sawNetMetric bool
 	seenDisk := make(map[string]struct{})
 
 	for _, m := range payload.Metrics {
@@ -187,6 +205,81 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 				seriesPointInt(ptTime, cm.ServerID, "processes", "zombies", m.Fields, m.Tags),
 				seriesPointInt(ptTime, cm.ServerID, "processes", "total", m.Fields, m.Tags),
 			)
+
+		case "net":
+			sawNetMetric = true
+			iface := m.Tags["interface"]
+			if iface == "" || strings.HasPrefix(iface, "lo") {
+				continue
+			}
+
+			if v, ok := m.Fields["bytes_sent"].(float64); ok {
+				value := int64(v)
+				netBytesSent += value
+				points = append(points,
+					seriesPointIntValue(ptTime, cm.ServerID, "net", "bytes_sent", value, m.Tags),
+				)
+			}
+
+			if v, ok := m.Fields["bytes_recv"].(float64); ok {
+				value := int64(v)
+				netBytesRecv += value
+				points = append(points,
+					seriesPointIntValue(ptTime, cm.ServerID, "net", "bytes_recv", value, m.Tags),
+				)
+			}
+
+		case "temperature", "sensors", "kiosk_temperature":
+			sawTemperatureMetric = true
+			if tempValue, ok := extractTemperature(m.Fields); ok {
+				if !temperatureCaptured {
+					cm.Temperature = tempValue
+					temperatureCaptured = true
+				}
+				points = append(points,
+					seriesPointFloatValue(ptTime, cm.ServerID, "environment", "temperature_c", tempValue, m.Tags),
+				)
+			}
+
+		case "vnstat_daily":
+			if dailyVnstatCaptured {
+				continue
+			}
+			rxBytes, rxOK := mibFieldToBytes(m.Fields, "rx_mib")
+			txBytes, txOK := mibFieldToBytes(m.Fields, "tx_mib")
+			if rxOK {
+				cm.NetDailyRxBytes = rxBytes
+			}
+			if txOK {
+				cm.NetDailyTxBytes = txBytes
+			}
+			if rxOK || txOK {
+				dailyVnstatCaptured = true
+				points = append(points,
+					seriesPointIntValue(ptTime, cm.ServerID, "vnstat_daily", "rx_bytes", cm.NetDailyRxBytes, m.Tags),
+					seriesPointIntValue(ptTime, cm.ServerID, "vnstat_daily", "tx_bytes", cm.NetDailyTxBytes, m.Tags),
+				)
+			}
+
+		case "vnstat_monthly":
+			if monthlyVnstatCaptured {
+				continue
+			}
+			rxBytes, rxOK := mibFieldToBytes(m.Fields, "rx_mib")
+			txBytes, txOK := mibFieldToBytes(m.Fields, "tx_mib")
+			if rxOK {
+				cm.NetMonthlyRxBytes = rxBytes
+			}
+			if txOK {
+				cm.NetMonthlyTxBytes = txBytes
+			}
+			if rxOK || txOK {
+				monthlyVnstatCaptured = true
+				points = append(points,
+					seriesPointIntValue(ptTime, cm.ServerID, "vnstat_monthly", "rx_bytes", cm.NetMonthlyRxBytes, m.Tags),
+					seriesPointIntValue(ptTime, cm.ServerID, "vnstat_monthly", "tx_bytes", cm.NetMonthlyTxBytes, m.Tags),
+				)
+			}
 		}
 	}
 
@@ -203,22 +296,63 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		models.SeriesPoint{Time: cm.Time, ServerID: cm.ServerID, Measurement: "disk", Field: "used_percent", ValueDouble: &cm.Disk, TagsJSON: []byte(`{"aggregated":true}`)},
 	)
 
-	if h.debugLoggingOn {
-		log.Printf("ingest: parsed server_id=%s time=%s cpu=%.4f memory=%.4f memory_total_bytes=%d memory_used_bytes=%d disk=%.4f disk_total_bytes=%d disk_used_bytes=%d disk_free_bytes=%d",
-			cm.ServerID, cm.Time.UTC().Format(time.RFC3339), cm.CPU, cm.Memory,
-			cm.MemoryTotalBytes, cm.MemoryUsedBytes, cm.Disk, cm.DiskTotalBytes, cm.DiskUsedBytes, cm.DiskFreeBytes)
+	cm.NetBytesSent = netBytesSent
+	cm.NetBytesRecv = netBytesRecv
+	if netBytesSent > 0 || netBytesRecv > 0 {
+		ns := cm.NetBytesSent
+		nr := cm.NetBytesRecv
+		points = append(points,
+			models.SeriesPoint{Time: cm.Time, ServerID: cm.ServerID, Measurement: "net", Field: "bytes_sent_total", ValueInt: &ns, TagsJSON: []byte(`{"aggregated":true}`)},
+			models.SeriesPoint{Time: cm.Time, ServerID: cm.ServerID, Measurement: "net", Field: "bytes_recv_total", ValueInt: &nr, TagsJSON: []byte(`{"aggregated":true}`)},
+		)
 	}
 
+	if h.debugLoggingOn {
+		log.Printf("ingest: parsed server_id=%s time=%s cpu=%.4f memory=%.4f temperature=%.2f memory_total_bytes=%d memory_used_bytes=%d disk=%.4f disk_total_bytes=%d disk_used_bytes=%d disk_free_bytes=%d net_bytes_sent=%d net_bytes_recv=%d",
+			cm.ServerID, cm.Time.UTC().Format(time.RFC3339), cm.CPU, cm.Memory,
+			cm.Temperature, cm.MemoryTotalBytes, cm.MemoryUsedBytes, cm.Disk, cm.DiskTotalBytes, cm.DiskUsedBytes, cm.DiskFreeBytes, cm.NetBytesSent, cm.NetBytesRecv)
+
+		if !sawTemperatureMetric {
+			log.Printf("ingest: temperature measurement missing for server_id=%s", cm.ServerID)
+		}
+		if !temperatureCaptured && sawTemperatureMetric {
+			log.Printf("ingest: temperature measurement present but unusable fields for server_id=%s fields=%v", cm.ServerID, payload.Metrics)
+		}
+		if !sawNetMetric {
+			log.Printf("ingest: net measurement missing for server_id=%s", cm.ServerID)
+		} else if netBytesSent == 0 && netBytesRecv == 0 {
+			log.Printf("ingest: net measurement reported zero bytes for server_id=%s (check interfaces)", cm.ServerID)
+		}
+	}
+
+	if h.debugLoggingOn {
+		log.Printf("ingest: saving summary metric server_id=%s time=%s", cm.ServerID, cm.Time.UTC().Format(time.RFC3339))
+	}
 	if err := h.repo.SaveMetric(r.Context(), cm); err != nil {
+		if h.debugLoggingOn {
+			log.Printf("ingest: failed to save summary metric server_id=%s time=%s err=%v", cm.ServerID, cm.Time.UTC().Format(time.RFC3339), err)
+		}
 		WriteJSONError(w, http.StatusInternalServerError, "failed to persist metric: "+err.Error())
 		return
+	}
+	if h.debugLoggingOn {
+		log.Printf("ingest: saved summary metric server_id=%s time=%s", cm.ServerID, cm.Time.UTC().Format(time.RFC3339))
 	}
 
 	if len(points) > 0 {
 		if h.directInsert || h.metricPoints == nil {
+			if h.debugLoggingOn {
+				log.Printf("ingest: writing %d series points for server_id=%s", len(points), cm.ServerID)
+			}
 			if err := h.repo.SaveSeriesPoints(r.Context(), points); err != nil {
+				if h.debugLoggingOn {
+					log.Printf("ingest: failed to save series points server_id=%s err=%v", cm.ServerID, err)
+				}
 				WriteJSONError(w, http.StatusInternalServerError, "failed to persist series points: "+err.Error())
 				return
+			}
+			if h.debugLoggingOn {
+				log.Printf("ingest: saved series points for server_id=%s", cm.ServerID)
 			}
 		} else {
 			for _, p := range points {
@@ -246,13 +380,13 @@ func (h *MetricsHandler) SeriesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, total, err := h.repo.ListSeriesMeta(r.Context(), serverID, p.limit, p.offset, p.includeTotals)
+	items, hasMore, err := h.repo.ListSeriesMeta(r.Context(), serverID, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, items, p.page, p.pageSize, total, p.includeTotals)
+	writePaginatedResponse(w, http.StatusOK, items, p.page, p.pageSize, hasMore)
 }
 
 func (h *MetricsHandler) SeriesLatest(w http.ResponseWriter, r *http.Request) {
@@ -303,13 +437,13 @@ func (h *MetricsHandler) SeriesQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, total, err := h.repo.SeriesQuery(r.Context(), serverID, measurement, field, rng, tagFilter, p.limit, p.offset, p.includeTotals)
+	out, hasMore, err := h.repo.SeriesQuery(r.Context(), serverID, measurement, field, rng, tagFilter, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, out, p.page, p.pageSize, total, p.includeTotals)
+	writePaginatedResponse(w, http.StatusOK, out, p.page, p.pageSize, hasMore)
 }
 
 func (h *MetricsHandler) Servers(w http.ResponseWriter, r *http.Request) {
@@ -322,13 +456,13 @@ func (h *MetricsHandler) Servers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	servers, total, err := h.repo.Servers(r.Context(), city, region, p.limit, p.offset, p.includeTotals)
+	servers, hasMore, err := h.repo.Servers(r.Context(), city, region, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, servers, p.page, p.pageSize, total, p.includeTotals)
+	writePaginatedResponse(w, http.StatusOK, servers, p.page, p.pageSize, hasMore)
 }
 
 func (h *MetricsHandler) ServersStatus(w http.ResponseWriter, r *http.Request) {
@@ -351,7 +485,7 @@ func (h *MetricsHandler) ServersStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	statuses, total, err := h.repo.ServerStatus(r.Context(), city, region, p.limit, p.offset, p.includeTotals)
+	statuses, hasMore, err := h.repo.ServerStatus(r.Context(), city, region, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -362,7 +496,7 @@ func (h *MetricsHandler) ServersStatus(w http.ResponseWriter, r *http.Request) {
 		statuses[i].Online = age <= threshold
 	}
 
-	writePaginatedResponse(w, http.StatusOK, statuses, p.page, p.pageSize, total, p.includeTotals)
+	writePaginatedResponse(w, http.StatusOK, statuses, p.page, p.pageSize, hasMore)
 }
 
 func (h *MetricsHandler) ServersStatusCity(w http.ResponseWriter, r *http.Request) {
@@ -383,13 +517,13 @@ func (h *MetricsHandler) ServersStatusCity(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	items, total, err := h.repo.CityStatusSummary(r.Context(), region, thresholdStr, p.limit, p.offset, p.includeTotals)
+	items, hasMore, err := h.repo.CityStatusSummary(r.Context(), region, thresholdStr, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, items, p.page, p.pageSize, total, p.includeTotals)
+	writePaginatedResponse(w, http.StatusOK, items, p.page, p.pageSize, hasMore)
 }
 
 func (h *MetricsHandler) Latest(w http.ResponseWriter, r *http.Request) {
@@ -399,13 +533,13 @@ func (h *MetricsHandler) Latest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, total, err := h.repo.LatestMetrics(r.Context(), p.limit, p.offset, p.includeTotals)
+	result, hasMore, err := h.repo.LatestMetrics(r.Context(), p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, result, p.page, p.pageSize, total, p.includeTotals)
+	writePaginatedResponse(w, http.StatusOK, result, p.page, p.pageSize, hasMore)
 }
 
 func (h *MetricsHandler) History(w http.ResponseWriter, r *http.Request) {
@@ -426,13 +560,13 @@ func (h *MetricsHandler) History(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, total, err := h.repo.HistoryMetrics(r.Context(), serverID, rng, p.limit, p.offset, p.includeTotals)
+	result, hasMore, err := h.repo.HistoryMetrics(r.Context(), serverID, rng, p.limit, p.offset)
 	if err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writePaginatedResponse(w, http.StatusOK, result, p.page, p.pageSize, total, p.includeTotals)
+	writePaginatedResponse(w, http.StatusOK, result, p.page, p.pageSize, hasMore)
 }
 
 func WriteJSONError(w http.ResponseWriter, status int, message string) {
@@ -465,6 +599,94 @@ func seriesPointInt(t time.Time, serverID, measurement, field string, fields map
 	}
 	jb, _ := json.Marshal(tags)
 	return models.SeriesPoint{Time: t, ServerID: serverID, Measurement: measurement, Field: field, ValueInt: vPtr, TagsJSON: jb}
+}
+
+func seriesPointIntValue(t time.Time, serverID, measurement, field string, value int64, tags map[string]string) models.SeriesPoint {
+	vv := value
+	jb, _ := json.Marshal(tags)
+	return models.SeriesPoint{Time: t, ServerID: serverID, Measurement: measurement, Field: field, ValueInt: &vv, TagsJSON: jb}
+}
+
+func seriesPointFloatValue(t time.Time, serverID, measurement, field string, value float64, tags map[string]string) models.SeriesPoint {
+	vv := value
+	jb, _ := json.Marshal(tags)
+	return models.SeriesPoint{Time: t, ServerID: serverID, Measurement: measurement, Field: field, ValueDouble: &vv, TagsJSON: jb}
+}
+
+func extractTemperature(fields map[string]interface{}) (float64, bool) {
+	if fields == nil {
+		return 0, false
+	}
+
+	getFloat := func(val interface{}) (float64, bool) {
+		switch v := val.(type) {
+		case float64:
+			return v, true
+		case int64:
+			return float64(v), true
+		case int:
+			return float64(v), true
+		case string:
+			if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+				return parsed, true
+			}
+		}
+		return 0, false
+	}
+
+	preferredKeys := []string{"temp_input", "temperature", "temp_c", "temp", "value", "current"}
+	for _, key := range preferredKeys {
+		if val, ok := fields[key]; ok {
+			if f, ok := getFloat(val); ok {
+				return f, true
+			}
+		}
+	}
+
+	for key, val := range fields {
+		lower := strings.ToLower(key)
+		if strings.Contains(lower, "temp") {
+			if f, ok := getFloat(val); ok {
+				return f, true
+			}
+		}
+	}
+
+	return 0, false
+}
+
+func mibFieldToBytes(fields map[string]interface{}, key string) (int64, bool) {
+	if fields == nil {
+		return 0, false
+	}
+	val, ok := fields[key]
+	if !ok {
+		return 0, false
+	}
+	var f float64
+	switch v := val.(type) {
+	case float64:
+		f = v
+	case float32:
+		f = float64(v)
+	case int:
+		f = float64(v)
+	case int64:
+		f = float64(v)
+	case string:
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			f = parsed
+		} else {
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
+	bytes := int64(f * 1024 * 1024)
+	if bytes < 0 {
+		bytes = 0
+	}
+	return bytes, true
 }
 
 func keysOf(m map[string]interface{}) []string {

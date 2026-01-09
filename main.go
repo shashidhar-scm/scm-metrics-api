@@ -261,7 +261,8 @@ func main() {
 	limiter = newRateLimiter(rateLimitMax, rateLimitWindow)
 
 	debug := getEnv("DEBUG", "") != ""
-	handler := handlers.NewMetricsHandler(metricsRepo, metricPointsChan, debug, getEnv("DIRECT_INSERT", "") != "")
+	logPayload := getEnv("LOG_PAYLOAD", "") != ""
+	handler := handlers.NewMetricsHandler(metricsRepo, metricPointsChan, debug, getEnv("DIRECT_INSERT", "") != "", logPayload)
 
 	routes.Register(http.DefaultServeMux, nil, routes.Handlers{
 		Root:              rateLimitMiddleware(handler.Root),

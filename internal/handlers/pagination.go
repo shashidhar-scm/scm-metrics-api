@@ -3,27 +3,23 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"math"
 	"net/http"
 	"strconv"
-	"strings"
 )
 
 var errInvalidPagination = errors.New("invalid pagination parameters")
 
 type paginationParams struct {
-	page          int
-	pageSize      int
-	limit         int
-	offset        int
-	includeTotals bool
+	page     int
+	pageSize int
+	limit    int
+	offset   int
 }
 
 type paginationPayload struct {
-	Page       int `json:"page"`
-	PageSize   int `json:"page_size"`
-	Total      int `json:"total"`
-	TotalPages int `json:"total_pages"`
+	Page     int  `json:"page"`
+	PageSize int  `json:"page_size"`
+	HasMore  bool `json:"has_more"`
 }
 
 func parsePaginationParams(r *http.Request, defaultPageSize, maxPageSize int) (paginationParams, error) {
@@ -51,44 +47,30 @@ func parsePaginationParams(r *http.Request, defaultPageSize, maxPageSize int) (p
 		pageSize = maxPageSize
 	}
 
-	includeTotals := false
-	switch strings.ToLower(q.Get("include_totals")) {
-	case "1", "true", "yes":
-		includeTotals = true
-	}
-
 	offset := (page - 1) * pageSize
 	return paginationParams{
-		page:          page,
-		pageSize:      pageSize,
-		limit:         pageSize,
-		offset:        offset,
-		includeTotals: includeTotals,
+		page:     page,
+		pageSize: pageSize,
+		limit:    pageSize,
+		offset:   offset,
 	}, nil
 }
 
-func writePaginatedResponse(w http.ResponseWriter, status int, data interface{}, page, pageSize, total int, includeTotals bool) {
+func writePaginatedResponse(w http.ResponseWriter, status int, data interface{}, page, pageSize int, hasMore bool) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	payload := map[string]interface{}{
 		"data":       data,
-		"pagination": buildPaginationPayload(page, pageSize, total, includeTotals),
+		"pagination": buildPaginationPayload(page, pageSize, hasMore),
 	}
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func buildPaginationPayload(page, pageSize, total int, includeTotals bool) paginationPayload {
-	totalPages := 0
-	if includeTotals && pageSize > 0 {
-		totalPages = int(math.Ceil(float64(total) / float64(pageSize)))
-	} else if !includeTotals {
-		total = -1
-		totalPages = -1
-	}
+
+func buildPaginationPayload(page, pageSize int, hasMore bool) paginationPayload {
 	return paginationPayload{
-		Page:       page,
-		PageSize:   pageSize,
-		Total:      total,
-		TotalPages: totalPages,
+		Page:     page,
+		PageSize: pageSize,
+		HasMore:  hasMore,
 	}
 }
