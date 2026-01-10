@@ -46,7 +46,7 @@ spec:
     spec:
       containers:
       - name: scm-metrics-api
-        image: smartcitymedia/scm-metrics-api:0.0.64
+        image: smartcitymedia/scm-metrics-api:0.0.65
         envFrom:
           - configMapRef:
               name: scm-metrics-api

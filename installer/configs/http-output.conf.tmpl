@@ -1,0 +1,8 @@
+[[outputs.http]]
+  url = "${API_URL}"
+  method = "POST"
+  timeout = "10s"
+  data_format = "json"
+
+  [outputs.http.headers]
+    Content-Type = "application/json"

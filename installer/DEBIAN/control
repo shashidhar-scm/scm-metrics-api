@@ -1,0 +1,9 @@
+Package: scm-metrics-installer
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: amd64
+Maintainer: Smart City Media <support@smartcitymedia.com>
+Depends: bash, coreutils, ca-certificates, curl, wget, gnupg, python3, gettext-base, telegraf, jq, vnstat, alsa-utils, lm-sensors, x11-xserver-utils, usbutils, ethtool, iw
+Description: Smart City Media kiosk metrics installer
+ Installs Telegraf, helper scripts, and configs that emit kiosk metrics to the SCM metrics API.

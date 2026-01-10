@@ -65,16 +65,58 @@ A compose file is included to run:
 docker compose up --build
 ```
 
-## Telegraf setup
+## Telegraf installer (.deb)
 
-This repo includes `metrics.sh` to install/configure Telegraf and send metrics to this API via HTTP output.
+Kiosks now install the Telegraf stack via a Debian package that wraps the old `metrics.sh` logic.
 
-- It configures Telegraf to POST to:
-  - `https://scm-metrics-api.citypost.us/api/metrics` (as currently set in the script)
+### Layout
 
-If you are running locally, change `API_URL` in `metrics.sh` to:
+```
+installer/
+  bin/        # helper scripts copied to /usr/local/bin
+  configs/    # telegraf.d fragments + templates (envsubst)
+  install.sh  # main entrypoint (also lives at /opt/scm-metrics/install.sh)
+  DEBIAN/     # control/postinst/prerm for dpkg
+```
 
-- `http://localhost:8080/api/metrics`
+`metrics.sh` in the repo is now just a thin wrapper that execs `installer/install.sh`, so kiosks that still download the raw script continue to work.
+
+### Build the installer
+
+```bash
+# Local build (requires dpkg-deb installed)
+make installer-deb
+
+# Or build inside Docker (handy on macOS)
+make installer-deb-docker
+```
+
+The output lives under `build/` (e.g. `build/scm-metrics-installer_0.0.0+dev.deb`). Set `VERSION=1.2.3` on the command line or tag the repo so the package version starts with a digit (Debian requirement).
+
+### Install / upgrade on a kiosk
+
+```bash
+scp build/scm-metrics-installer_<ver>.deb smartcity@kiosk:/tmp/
+ssh smartcity@kiosk
+sudo systemctl stop telegraf   # ensure the old metrics.sh isn’t running
+sudo dpkg -i /tmp/scm-metrics-installer_<ver>.deb
+```
+
+The `postinst` script runs `/opt/scm-metrics/install.sh`, which:
+
+1. Installs/updates Telegraf, vnStat, jq, lm-sensors, alsa-utils, etc.
+2. Copies helper scripts into `/usr/local/bin`.
+3. Renders templated configs (HTTP output, inputs, global tags) into `/etc/telegraf/telegraf.d`.
+4. Validates config and restarts Telegraf.
+
+### Validation checklist
+
+1. `sudo journalctl -u telegraf -n 50` – ensure no HTTP output errors.
+2. `sudo telegraf --config /etc/telegraf/telegraf.conf --config-directory /etc/telegraf/telegraf.d --test | tail` – confirm helpers emit line protocol.
+3. `curl -v https://scm-metrics-api.citypost.us/api/metrics` (expect 405/404) – basic reachability.
+4. After one minute, hit `/api/metrics/latest?server_id=<id>` and verify new fields like `link_state` and `process_statuses` are present.
+
+For local testing, override `API_URL` when running the installer (`API_URL=http://localhost:8080/api/metrics make installer-deb && sudo API_URL=... /opt/scm-metrics/install.sh`).
 
 ## API
 
