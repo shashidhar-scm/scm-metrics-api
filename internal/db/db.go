@@ -13,18 +13,18 @@ import (
 )
 
 type Config struct {
-	Host           string
-	Port           string
-	User           string
-	Password       string
-	Name           string
-	SSLMode        string
-	AdminDB        string
-	URL            string
-	MaxOpenConns   int
-	MaxIdleConns   int
-	MaxLifetime    time.Duration
-	MaxIdleTime    time.Duration
+	Host         string
+	Port         string
+	User         string
+	Password     string
+	Name         string
+	SSLMode      string
+	AdminDB      string
+	URL          string
+	MaxOpenConns int
+	MaxIdleConns int
+	MaxLifetime  time.Duration
+	MaxIdleTime  time.Duration
 }
 
 func Setup() (*sql.DB, error) {
@@ -129,7 +129,7 @@ func ensureDatabaseExists(cfg Config) error {
 }
 
 func ensureSchema(conn *sql.DB) error {
-	if _, err := conn.Exec("CREATE TABLE IF NOT EXISTS server_metrics (time TIMESTAMPTZ NOT NULL, server_id TEXT NOT NULL, cpu DOUBLE PRECISION NOT NULL DEFAULT 0, memory DOUBLE PRECISION NOT NULL DEFAULT 0, temperature DOUBLE PRECISION NOT NULL DEFAULT 0, chassis_temperature DOUBLE PRECISION NOT NULL DEFAULT 0, hotspot_temperature DOUBLE PRECISION NOT NULL DEFAULT 0, sound_volume_percent BIGINT NOT NULL DEFAULT 0, sound_muted BOOLEAN NOT NULL DEFAULT FALSE, fan_rpm BIGINT NOT NULL DEFAULT 0, memory_total_bytes BIGINT NOT NULL DEFAULT 0, memory_used_bytes BIGINT NOT NULL DEFAULT 0, disk DOUBLE PRECISION NOT NULL DEFAULT 0, disk_total_bytes BIGINT NOT NULL DEFAULT 0, disk_used_bytes BIGINT NOT NULL DEFAULT 0, disk_free_bytes BIGINT NOT NULL DEFAULT 0, net_bytes_sent BIGINT NOT NULL DEFAULT 0, net_bytes_recv BIGINT NOT NULL DEFAULT 0, net_daily_rx_bytes BIGINT NOT NULL DEFAULT 0, net_daily_tx_bytes BIGINT NOT NULL DEFAULT 0, net_monthly_rx_bytes BIGINT NOT NULL DEFAULT 0, net_monthly_tx_bytes BIGINT NOT NULL DEFAULT 0, uptime BIGINT NOT NULL DEFAULT 0, city TEXT, city_name TEXT, region TEXT, region_name TEXT)"); err != nil {
+	if _, err := conn.Exec("CREATE TABLE IF NOT EXISTS server_metrics (time TIMESTAMPTZ NOT NULL, server_id TEXT NOT NULL, cpu DOUBLE PRECISION NOT NULL DEFAULT 0, memory DOUBLE PRECISION NOT NULL DEFAULT 0, temperature DOUBLE PRECISION NOT NULL DEFAULT 0, chassis_temperature DOUBLE PRECISION NOT NULL DEFAULT 0, hotspot_temperature DOUBLE PRECISION NOT NULL DEFAULT 0, power_online BOOLEAN NOT NULL DEFAULT FALSE, battery_present BOOLEAN NOT NULL DEFAULT FALSE, battery_charge_pct BIGINT NOT NULL DEFAULT 0, battery_voltage_mv BIGINT NOT NULL DEFAULT 0, battery_current_ma BIGINT NOT NULL DEFAULT 0, sound_volume_percent BIGINT NOT NULL DEFAULT 0, sound_muted BOOLEAN NOT NULL DEFAULT FALSE, display_connected BOOLEAN NOT NULL DEFAULT FALSE, display_width BIGINT NOT NULL DEFAULT 0, display_height BIGINT NOT NULL DEFAULT 0, display_refresh_hz BIGINT NOT NULL DEFAULT 0, display_primary BOOLEAN NOT NULL DEFAULT FALSE, display_dpms_enabled BOOLEAN NOT NULL DEFAULT FALSE, fan_rpm BIGINT NOT NULL DEFAULT 0, memory_total_bytes BIGINT NOT NULL DEFAULT 0, memory_used_bytes BIGINT NOT NULL DEFAULT 0, disk DOUBLE PRECISION NOT NULL DEFAULT 0, disk_total_bytes BIGINT NOT NULL DEFAULT 0, disk_used_bytes BIGINT NOT NULL DEFAULT 0, disk_free_bytes BIGINT NOT NULL DEFAULT 0, net_bytes_sent BIGINT NOT NULL DEFAULT 0, net_bytes_recv BIGINT NOT NULL DEFAULT 0, net_daily_rx_bytes BIGINT NOT NULL DEFAULT 0, net_daily_tx_bytes BIGINT NOT NULL DEFAULT 0, net_monthly_rx_bytes BIGINT NOT NULL DEFAULT 0, net_monthly_tx_bytes BIGINT NOT NULL DEFAULT 0, uptime BIGINT NOT NULL DEFAULT 0, city TEXT, city_name TEXT, region TEXT, region_name TEXT)"); err != nil {
 		return err
 	}
 	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS sound_volume_percent BIGINT NOT NULL DEFAULT 0"); err != nil {
@@ -142,6 +142,39 @@ func ensureSchema(conn *sql.DB) error {
 		return err
 	}
 	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS hotspot_temperature DOUBLE PRECISION NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS power_online BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS battery_present BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS battery_charge_pct BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS battery_voltage_mv BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS battery_current_ma BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS display_connected BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS display_width BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS display_height BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS display_refresh_hz BIGINT NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS display_primary BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
+		return err
+	}
+	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS display_dpms_enabled BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
 		return err
 	}
 	if _, err := conn.Exec("ALTER TABLE server_metrics ADD COLUMN IF NOT EXISTS fan_rpm BIGINT NOT NULL DEFAULT 0"); err != nil {

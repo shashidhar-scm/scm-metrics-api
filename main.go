@@ -262,7 +262,15 @@ func main() {
 
 	debug := getEnv("DEBUG", "") != ""
 	logPayload := getEnv("LOG_PAYLOAD", "") != ""
-	handler := handlers.NewMetricsHandler(metricsRepo, metricPointsChan, debug, getEnv("DIRECT_INSERT", "") != "", logPayload)
+	debugServerID := getEnv("DEBUG_SERVER_ID", "")
+	handler := handlers.NewMetricsHandler(
+		metricsRepo,
+		metricPointsChan,
+		debug,
+		getEnv("DIRECT_INSERT", "") != "",
+		logPayload,
+		debugServerID,
+	)
 
 	routes.Register(http.DefaultServeMux, nil, routes.Handlers{
 		Root:              rateLimitMiddleware(handler.Root),

@@ -19,6 +19,7 @@ data:
   RATE_LIMIT_MAX: "50"
   DEBUG: "true"
   LOG_PAYLOAD: "true"
+  DEBUG_SERVER_ID: "dart2"
 kind: ConfigMap
 metadata:
   name: scm-metrics-api
@@ -45,7 +46,7 @@ spec:
     spec:
       containers:
       - name: scm-metrics-api
-        image: smartcitymedia/scm-metrics-api:0.0.42
+        image: smartcitymedia/scm-metrics-api:0.0.54
         envFrom:
           - configMapRef:
               name: scm-metrics-api

@@ -23,16 +23,27 @@ func NewMetricsRepository(db *sql.DB) *MetricsRepository {
 func (r *MetricsRepository) SaveMetric(ctx context.Context, m models.CleanMetric) error {
 	_, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO server_metrics(time, server_id, cpu, memory, temperature, chassis_temperature, hotspot_temperature, sound_volume_percent, sound_muted, fan_rpm, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes, net_bytes_sent, net_bytes_recv, net_daily_rx_bytes, net_daily_tx_bytes, net_monthly_rx_bytes, net_monthly_tx_bytes, uptime, city, city_name, region, region_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+		`INSERT INTO server_metrics(time, server_id, cpu, memory, temperature, chassis_temperature, hotspot_temperature, power_online, battery_present, battery_charge_pct, battery_voltage_mv, battery_current_ma, sound_volume_percent, sound_muted, display_connected, display_width, display_height, display_refresh_hz, display_primary, display_dpms_enabled, fan_rpm, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes, net_bytes_sent, net_bytes_recv, net_daily_rx_bytes, net_daily_tx_bytes, net_monthly_rx_bytes, net_monthly_tx_bytes, uptime, city, city_name, region, region_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38)
          ON CONFLICT (server_id, time) DO UPDATE
          SET cpu = EXCLUDED.cpu,
              memory = EXCLUDED.memory,
              temperature = EXCLUDED.temperature,
              chassis_temperature = EXCLUDED.chassis_temperature,
              hotspot_temperature = EXCLUDED.hotspot_temperature,
+             power_online = EXCLUDED.power_online,
+             battery_present = EXCLUDED.battery_present,
+             battery_charge_pct = EXCLUDED.battery_charge_pct,
+             battery_voltage_mv = EXCLUDED.battery_voltage_mv,
+             battery_current_ma = EXCLUDED.battery_current_ma,
              sound_volume_percent = EXCLUDED.sound_volume_percent,
              sound_muted = EXCLUDED.sound_muted,
+             display_connected = EXCLUDED.display_connected,
+             display_width = EXCLUDED.display_width,
+             display_height = EXCLUDED.display_height,
+             display_refresh_hz = EXCLUDED.display_refresh_hz,
+             display_primary = EXCLUDED.display_primary,
+             display_dpms_enabled = EXCLUDED.display_dpms_enabled,
              fan_rpm = EXCLUDED.fan_rpm,
              memory_total_bytes = EXCLUDED.memory_total_bytes,
              memory_used_bytes = EXCLUDED.memory_used_bytes,
@@ -51,7 +62,7 @@ func (r *MetricsRepository) SaveMetric(ctx context.Context, m models.CleanMetric
              city_name = EXCLUDED.city_name,
              region = EXCLUDED.region,
              region_name = EXCLUDED.region_name`,
-		m.Time, m.ServerID, m.CPU, m.Memory, m.Temperature, m.ChassisTemperature, m.HotspotTemperature, m.SoundVolumePercent, m.SoundMuted, m.FanRPM, m.MemoryTotalBytes, m.MemoryUsedBytes, m.Disk, m.DiskTotalBytes, m.DiskUsedBytes, m.DiskFreeBytes, m.NetBytesSent, m.NetBytesRecv, m.NetDailyRxBytes, m.NetDailyTxBytes, m.NetMonthlyRxBytes, m.NetMonthlyTxBytes, m.Uptime, m.City, m.CityName, m.Region, m.RegionName,
+		m.Time, m.ServerID, m.CPU, m.Memory, m.Temperature, m.ChassisTemperature, m.HotspotTemperature, m.PowerOnline, m.BatteryPresent, m.BatteryChargePct, m.BatteryVoltageMV, m.BatteryCurrentMA, m.SoundVolumePercent, m.SoundMuted, m.DisplayConnected, m.DisplayWidth, m.DisplayHeight, m.DisplayRefreshHz, m.DisplayPrimary, m.DisplayDpmsEnabled, m.FanRPM, m.MemoryTotalBytes, m.MemoryUsedBytes, m.Disk, m.DiskTotalBytes, m.DiskUsedBytes, m.DiskFreeBytes, m.NetBytesSent, m.NetBytesRecv, m.NetDailyRxBytes, m.NetDailyTxBytes, m.NetMonthlyRxBytes, m.NetMonthlyTxBytes, m.Uptime, m.City, m.CityName, m.Region, m.RegionName,
 	)
 	return err
 }
@@ -330,7 +341,11 @@ func (r *MetricsRepository) LatestMetrics(ctx context.Context, limit, offset int
 	limitPlusOne := limit + 1
 	rows, err := r.db.QueryContext(ctx, `
         SELECT DISTINCT ON (server_id)
-            server_id, time, cpu, memory, temperature, chassis_temperature, hotspot_temperature, sound_volume_percent, sound_muted, fan_rpm,
+            server_id, time, cpu, memory, temperature, chassis_temperature, hotspot_temperature,
+            power_online, battery_present, battery_charge_pct, battery_voltage_mv, battery_current_ma,
+            sound_volume_percent, sound_muted,
+            display_connected, display_width, display_height, display_refresh_hz, display_primary, display_dpms_enabled,
+            fan_rpm,
             memory_total_bytes, memory_used_bytes,
             disk, disk_total_bytes, disk_used_bytes, disk_free_bytes,
             net_bytes_sent, net_bytes_recv,
@@ -356,8 +371,19 @@ func (r *MetricsRepository) LatestMetrics(ctx context.Context, limit, offset int
 			&m.Temperature,
 			&m.ChassisTemperature,
 			&m.HotspotTemperature,
+			&m.PowerOnline,
+			&m.BatteryPresent,
+			&m.BatteryChargePct,
+			&m.BatteryVoltageMV,
+			&m.BatteryCurrentMA,
 			&m.SoundVolumePercent,
 			&m.SoundMuted,
+			&m.DisplayConnected,
+			&m.DisplayWidth,
+			&m.DisplayHeight,
+			&m.DisplayRefreshHz,
+			&m.DisplayPrimary,
+			&m.DisplayDpmsEnabled,
 			&m.FanRPM,
 			&m.MemoryTotalBytes,
 			&m.MemoryUsedBytes,
@@ -396,7 +422,11 @@ func (r *MetricsRepository) LatestMetrics(ctx context.Context, limit, offset int
 func (r *MetricsRepository) HistoryMetrics(ctx context.Context, serverID, rng string, limit, offset int) ([]models.HistoryMetric, bool, error) {
 	limitPlusOne := limit + 1
 	rows, err := r.db.QueryContext(ctx, `
-        SELECT time, cpu, memory, temperature, chassis_temperature, hotspot_temperature, sound_volume_percent, sound_muted, fan_rpm,
+        SELECT time, cpu, memory, temperature, chassis_temperature, hotspot_temperature,
+               power_online, battery_present, battery_charge_pct, battery_voltage_mv, battery_current_ma,
+               sound_volume_percent, sound_muted,
+               display_connected, display_width, display_height, display_refresh_hz, display_primary, display_dpms_enabled,
+               fan_rpm,
                memory_total_bytes, memory_used_bytes,
                disk, disk_total_bytes, disk_used_bytes, disk_free_bytes,
                net_bytes_sent, net_bytes_recv,
@@ -422,8 +452,19 @@ func (r *MetricsRepository) HistoryMetrics(ctx context.Context, serverID, rng st
 			&m.Temperature,
 			&m.ChassisTemperature,
 			&m.HotspotTemperature,
+			&m.PowerOnline,
+			&m.BatteryPresent,
+			&m.BatteryChargePct,
+			&m.BatteryVoltageMV,
+			&m.BatteryCurrentMA,
 			&m.SoundVolumePercent,
 			&m.SoundMuted,
+			&m.DisplayConnected,
+			&m.DisplayWidth,
+			&m.DisplayHeight,
+			&m.DisplayRefreshHz,
+			&m.DisplayPrimary,
+			&m.DisplayDpmsEnabled,
 			&m.FanRPM,
 			&m.MemoryTotalBytes,
 			&m.MemoryUsedBytes,

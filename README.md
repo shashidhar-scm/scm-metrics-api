@@ -46,6 +46,7 @@ Otherwise it builds the connection string from:
 Optional:
 
 - `DEBUG` (set to any non-empty value to enable ingest debug logging)
+- `DEBUG_SERVER_ID` (optional; when set alongside `DEBUG`, only log payload/metric details for that specific server ID or host tag)
 
 ### Run
 

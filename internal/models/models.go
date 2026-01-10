@@ -20,8 +20,19 @@ type CleanMetric struct {
 	Temperature        float64
 	ChassisTemperature float64
 	HotspotTemperature float64
+	PowerOnline        bool
+	BatteryPresent     bool
+	BatteryChargePct   int64
+	BatteryVoltageMV   int64
+	BatteryCurrentMA   int64
 	SoundVolumePercent int64
 	SoundMuted         bool
+	DisplayConnected   bool
+	DisplayWidth       int64
+	DisplayHeight      int64
+	DisplayRefreshHz   int64
+	DisplayPrimary     bool
+	DisplayDpmsEnabled bool
 	FanRPM             int64
 	MemoryTotalBytes   int64
 	MemoryUsedBytes    int64
@@ -51,8 +62,19 @@ type LatestMetric struct {
 	Temperature        float64   `json:"temperature"`
 	ChassisTemperature float64   `json:"chassis_temp_c"`
 	HotspotTemperature float64   `json:"hotspot_temp_c"`
+	PowerOnline        bool      `json:"power_online"`
+	BatteryPresent     bool      `json:"battery_present"`
+	BatteryChargePct   int64     `json:"battery_charge_percent"`
+	BatteryVoltageMV   int64     `json:"battery_voltage_mv"`
+	BatteryCurrentMA   int64     `json:"battery_current_ma"`
 	SoundVolumePercent int64     `json:"sound_volume_percent"`
 	SoundMuted         bool      `json:"sound_muted"`
+	DisplayConnected   bool      `json:"display_connected"`
+	DisplayWidth       int64     `json:"display_width"`
+	DisplayHeight      int64     `json:"display_height"`
+	DisplayRefreshHz   int64     `json:"display_refresh_hz"`
+	DisplayPrimary     bool      `json:"display_primary"`
+	DisplayDpmsEnabled bool      `json:"display_dpms_enabled"`
 	FanRPM             int64     `json:"fan_rpm"`
 	MemoryTotalBytes   int64     `json:"memory_total_bytes"`
 	MemoryUsedBytes    int64     `json:"memory_used_bytes"`
@@ -80,8 +102,19 @@ type HistoryMetric struct {
 	Temperature        float64   `json:"temperature"`
 	ChassisTemperature float64   `json:"chassis_temp_c"`
 	HotspotTemperature float64   `json:"hotspot_temp_c"`
+	PowerOnline        bool      `json:"power_online"`
+	BatteryPresent     bool      `json:"battery_present"`
+	BatteryChargePct   int64     `json:"battery_charge_percent"`
+	BatteryVoltageMV   int64     `json:"battery_voltage_mv"`
+	BatteryCurrentMA   int64     `json:"battery_current_ma"`
 	SoundVolumePercent int64     `json:"sound_volume_percent"`
 	SoundMuted         bool      `json:"sound_muted"`
+	DisplayConnected   bool      `json:"display_connected"`
+	DisplayWidth       int64     `json:"display_width"`
+	DisplayHeight      int64     `json:"display_height"`
+	DisplayRefreshHz   int64     `json:"display_refresh_hz"`
+	DisplayPrimary     bool      `json:"display_primary"`
+	DisplayDpmsEnabled bool      `json:"display_dpms_enabled"`
 	FanRPM             int64     `json:"fan_rpm"`
 	MemoryTotalBytes   int64     `json:"memory_total_bytes"`
 	MemoryUsedBytes    int64     `json:"memory_used_bytes"`

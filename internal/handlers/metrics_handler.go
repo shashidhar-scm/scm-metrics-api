@@ -23,16 +23,32 @@ type MetricsHandler struct {
 	debugLoggingOn bool
 	directInsert   bool
 	logPayload     bool
+	debugServerID  string
 }
 
-func NewMetricsHandler(repo *repository.MetricsRepository, metricPoints chan models.SeriesPoint, debug bool, directInsert bool, logPayload bool) *MetricsHandler {
+func NewMetricsHandler(repo *repository.MetricsRepository, metricPoints chan models.SeriesPoint, debug bool, directInsert bool, logPayload bool, debugServerID string) *MetricsHandler {
 	return &MetricsHandler{
 		repo:           repo,
 		metricPoints:   metricPoints,
 		debugLoggingOn: debug,
 		directInsert:   directInsert,
 		logPayload:     logPayload,
+		debugServerID:  debugServerID,
 	}
+}
+
+func deriveServerIdentifiers(metrics []models.Metric) (string, string) {
+	for _, metric := range metrics {
+		serverID := metric.Tags["server_id"]
+		host := metric.Tags["host"]
+		if serverID == "" || serverID == "$HOSTNAME" {
+			serverID = host
+		}
+		if serverID != "" || host != "" {
+			return serverID, host
+		}
+	}
+	return "", ""
 }
 
 func (h *MetricsHandler) Root(w http.ResponseWriter, r *http.Request) {
@@ -48,11 +64,9 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.debugLoggingOn {
-		log.Printf("ingest: received %d metrics", len(payload.Metrics))
-	}
+	payloadServerID, payloadHost := deriveServerIdentifiers(payload.Metrics)
 
-	if h.logPayload {
+	if h.logPayload && h.shouldLogForServer(payloadServerID, payloadHost) {
 		if b, err := json.Marshal(payload); err == nil {
 			log.Printf("ingest_payload: %s", string(b))
 		} else {
@@ -73,22 +87,37 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	var fanCaptured bool
 	var volumeCaptured bool
 	var hotspotCaptured bool
+	var powerOnlineCaptured bool
+	var batteryCaptured bool
+	var displayCaptured bool
+	var displayBestRank int
+	displayBestRank = -1
 	var dailyVnstatCaptured bool
 	var monthlyVnstatCaptured bool
 	var sawTemperatureMetric bool
 	var sawNetMetric bool
 	seenDisk := make(map[string]struct{})
 
+	headerLogged := false
+
 	for _, m := range payload.Metrics {
-		if h.debugLoggingOn {
-			log.Printf("ingest: metric name=%s tags=%v fields=%v", m.Name, m.Tags, keysOf(m.Fields))
-		}
 
 		if cm.ServerID == "" {
 			cm.ServerID = m.Tags["server_id"]
 			if cm.ServerID == "" || cm.ServerID == "$HOSTNAME" {
 				cm.ServerID = m.Tags["host"]
 			}
+		}
+
+		logThisMetric := h.shouldLogForServer(cm.ServerID, m.Tags["host"])
+
+		if logThisMetric && !headerLogged {
+			log.Printf("ingest: received %d metrics", len(payload.Metrics))
+			headerLogged = true
+		}
+
+		if logThisMetric {
+			log.Printf("ingest: metric name=%s tags=%v fields=%v", m.Name, m.Tags, keysOf(m.Fields))
 		}
 
 		if strings.HasPrefix(m.Name, "kiosk_") {
@@ -119,6 +148,138 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 			if cm.CPU == 0 {
 				if v, ok := m.Fields["usage_idle"].(float64); ok {
 					cm.CPU = 100 - v
+				}
+			}
+
+		case "kiosk_display":
+			isPrimary := false
+			if primaryVal, ok := toInt64(m.Fields["primary"]); ok && primaryVal != 0 {
+				isPrimary = true
+			}
+
+			rank := 0
+			if connectedVal, ok := toInt64(m.Fields["connected"]); ok && connectedVal != 0 {
+				rank = 1
+				if isPrimary {
+					rank = 3
+				}
+			} else if isPrimary {
+				rank = 2
+			}
+
+			if !displayCaptured || rank > displayBestRank {
+				if connectedVal, ok := toInt64(m.Fields["connected"]); ok {
+					cm.DisplayConnected = connectedVal != 0
+				} else {
+					cm.DisplayConnected = false
+				}
+				if widthVal, ok := toInt64(m.Fields["width"]); ok {
+					cm.DisplayWidth = widthVal
+				} else {
+					cm.DisplayWidth = 0
+				}
+				if heightVal, ok := toInt64(m.Fields["height"]); ok {
+					cm.DisplayHeight = heightVal
+				} else {
+					cm.DisplayHeight = 0
+				}
+				if refreshVal, ok := toInt64(m.Fields["refresh_hz"]); ok {
+					cm.DisplayRefreshHz = refreshVal
+				} else {
+					cm.DisplayRefreshHz = 0
+				}
+				if dpmsVal, ok := toInt64(m.Fields["dpms_enabled"]); ok {
+					cm.DisplayDpmsEnabled = dpmsVal != 0
+				} else {
+					cm.DisplayDpmsEnabled = false
+				}
+				cm.DisplayPrimary = isPrimary
+				displayCaptured = true
+				displayBestRank = rank
+			}
+
+			if len(m.Fields) > 0 {
+				for fieldName, raw := range m.Fields {
+					if iv, ok := toInt64(raw); ok {
+						val := iv
+						points = append(points, models.SeriesPoint{
+							Time:        ptTime,
+							ServerID:    cm.ServerID,
+							Measurement: "kiosk_display",
+							Field:       fieldName,
+							ValueInt:    &val,
+							TagsJSON:    mustJSON(m.Tags),
+						})
+						continue
+					}
+					if fv, ok := toFloat64(raw); ok {
+						val := fv
+						points = append(points, models.SeriesPoint{
+							Time:        ptTime,
+							ServerID:    cm.ServerID,
+							Measurement: "kiosk_display",
+							Field:       fieldName,
+							ValueDouble: &val,
+							TagsJSON:    mustJSON(m.Tags),
+						})
+					}
+				}
+			}
+
+		case "kiosk_power":
+			powerType := strings.ToLower(m.Tags["type"])
+			if powerType == "battery" {
+				if batteryCaptured {
+					continue
+				}
+				if presentVal, ok := toInt64(m.Fields["present"]); ok {
+					cm.BatteryPresent = presentVal != 0
+				}
+				if chargeVal, ok := toInt64(m.Fields["charge_percent"]); ok {
+					cm.BatteryChargePct = chargeVal
+				}
+				if voltageVal, ok := toInt64(m.Fields["voltage_mv"]); ok {
+					cm.BatteryVoltageMV = voltageVal
+				}
+				if currentVal, ok := toInt64(m.Fields["current_ma"]); ok {
+					cm.BatteryCurrentMA = currentVal
+				}
+				batteryCaptured = true
+			} else {
+				if powerOnlineCaptured {
+					continue
+				}
+				if onlineVal, ok := toInt64(m.Fields["online"]); ok {
+					cm.PowerOnline = onlineVal != 0
+					powerOnlineCaptured = true
+				}
+			}
+
+			if len(m.Fields) > 0 {
+				for fieldName, raw := range m.Fields {
+					if iv, ok := toInt64(raw); ok {
+						val := iv
+						points = append(points, models.SeriesPoint{
+							Time:        ptTime,
+							ServerID:    cm.ServerID,
+							Measurement: "kiosk_power",
+							Field:       fieldName,
+							ValueInt:    &val,
+							TagsJSON:    mustJSON(m.Tags),
+						})
+						continue
+					}
+					if fv, ok := toFloat64(raw); ok {
+						val := fv
+						points = append(points, models.SeriesPoint{
+							Time:        ptTime,
+							ServerID:    cm.ServerID,
+							Measurement: "kiosk_power",
+							Field:       fieldName,
+							ValueDouble: &val,
+							TagsJSON:    mustJSON(m.Tags),
+						})
+					}
 				}
 			}
 
@@ -307,6 +468,26 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 				)
 			}
 
+		case "vnstat_monthly":
+			if monthlyVnstatCaptured {
+				continue
+			}
+			rxBytes, rxOK := mibFieldToBytes(m.Fields, "rx_mib")
+			txBytes, txOK := mibFieldToBytes(m.Fields, "tx_mib")
+			if rxOK {
+				cm.NetMonthlyRxBytes = rxBytes
+			}
+			if txOK {
+				cm.NetMonthlyTxBytes = txBytes
+			}
+			if rxOK || txOK {
+				monthlyVnstatCaptured = true
+				points = append(points,
+					seriesPointIntValue(ptTime, cm.ServerID, "vnstat_monthly", "rx_bytes", cm.NetMonthlyRxBytes, m.Tags),
+					seriesPointIntValue(ptTime, cm.ServerID, "vnstat_monthly", "tx_bytes", cm.NetMonthlyTxBytes, m.Tags),
+				)
+			}
+
 		case "kiosk_volume":
 			if volumeCaptured {
 				continue
@@ -346,26 +527,6 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 					)
 				}
 			}
-
-		case "vnstat_monthly":
-			if monthlyVnstatCaptured {
-				continue
-			}
-			rxBytes, rxOK := mibFieldToBytes(m.Fields, "rx_mib")
-			txBytes, txOK := mibFieldToBytes(m.Fields, "tx_mib")
-			if rxOK {
-				cm.NetMonthlyRxBytes = rxBytes
-			}
-			if txOK {
-				cm.NetMonthlyTxBytes = txBytes
-			}
-			if rxOK || txOK {
-				monthlyVnstatCaptured = true
-				points = append(points,
-					seriesPointIntValue(ptTime, cm.ServerID, "vnstat_monthly", "rx_bytes", cm.NetMonthlyRxBytes, m.Tags),
-					seriesPointIntValue(ptTime, cm.ServerID, "vnstat_monthly", "tx_bytes", cm.NetMonthlyTxBytes, m.Tags),
-				)
-			}
 		}
 	}
 
@@ -393,7 +554,9 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	if h.debugLoggingOn {
+	debugForServer := h.shouldLogForServer(cm.ServerID, payloadHost)
+
+	if h.debugLoggingOn && debugForServer {
 		log.Printf("ingest: parsed server_id=%s time=%s cpu=%.4f memory=%.4f temperature=%.2f chassis_temp=%.2f hotspot_temp=%.2f fan_rpm=%d volume_percent=%d muted=%t memory_total_bytes=%d memory_used_bytes=%d disk=%.4f disk_total_bytes=%d disk_used_bytes=%d disk_free_bytes=%d net_bytes_sent=%d net_bytes_recv=%d",
 			cm.ServerID, cm.Time.UTC().Format(time.RFC3339), cm.CPU, cm.Memory,
 			cm.Temperature, cm.ChassisTemperature, cm.HotspotTemperature, cm.FanRPM, cm.SoundVolumePercent, cm.SoundMuted, cm.MemoryTotalBytes, cm.MemoryUsedBytes, cm.Disk, cm.DiskTotalBytes, cm.DiskUsedBytes, cm.DiskFreeBytes, cm.NetBytesSent, cm.NetBytesRecv)
@@ -411,41 +574,52 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.debugLoggingOn {
+	if h.debugLoggingOn && debugForServer {
 		log.Printf("ingest: saving summary metric server_id=%s time=%s", cm.ServerID, cm.Time.UTC().Format(time.RFC3339))
 	}
 	if err := h.repo.SaveMetric(r.Context(), cm); err != nil {
-		if h.debugLoggingOn {
+		if h.debugLoggingOn && debugForServer {
 			log.Printf("ingest: failed to save summary metric server_id=%s time=%s err=%v", cm.ServerID, cm.Time.UTC().Format(time.RFC3339), err)
 		}
 		WriteJSONError(w, http.StatusInternalServerError, "failed to persist metric: "+err.Error())
 		return
 	}
-	if h.debugLoggingOn {
+	if h.debugLoggingOn && debugForServer {
 		log.Printf("ingest: saved summary metric server_id=%s time=%s", cm.ServerID, cm.Time.UTC().Format(time.RFC3339))
 	}
 
 	if len(points) > 0 {
 		if h.directInsert || h.metricPoints == nil {
-			if h.debugLoggingOn {
+			if h.debugLoggingOn && debugForServer {
 				log.Printf("ingest: writing %d series points for server_id=%s", len(points), cm.ServerID)
 			}
 			if err := h.repo.SaveSeriesPoints(r.Context(), points); err != nil {
-				if h.debugLoggingOn {
+				if h.debugLoggingOn && debugForServer {
 					log.Printf("ingest: failed to save series points server_id=%s err=%v", cm.ServerID, err)
 				}
 				WriteJSONError(w, http.StatusInternalServerError, "failed to persist series points: "+err.Error())
 				return
 			}
-			if h.debugLoggingOn {
+			if h.debugLoggingOn && debugForServer {
 				log.Printf("ingest: saved series points for server_id=%s", cm.ServerID)
 			}
 		} else {
 			for _, p := range points {
-				if p.ServerID == "" {
-					continue
+				pointLog := h.shouldLogForServer(p.ServerID, payloadHost)
+				if h.debugLoggingOn && pointLog {
+					log.Printf("ingest: queueing point measurement=%s field=%s", p.Measurement, p.Field)
 				}
-				h.metricPoints <- p
+				select {
+				case h.metricPoints <- p:
+					if h.debugLoggingOn && pointLog {
+						log.Printf("ingest: queued point measurement=%s field=%s", p.Measurement, p.Field)
+					}
+
+				default:
+					if h.debugLoggingOn && pointLog {
+						log.Printf("ingest: failed to queue point measurement=%s field=%s", p.Measurement, p.Field)
+					}
+				}
 			}
 		}
 	}
@@ -838,4 +1012,21 @@ func keysOf(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func (h *MetricsHandler) shouldLogForServer(serverID, hostTag string) bool {
+	if !h.debugLoggingOn {
+		return false
+	}
+	if h.debugServerID == "" {
+		return true
+	}
+	target := strings.ToLower(h.debugServerID)
+	if serverID != "" && strings.ToLower(serverID) == target {
+		return true
+	}
+	if hostTag != "" && strings.ToLower(hostTag) == target {
+		return true
+	}
+	return false
 }
