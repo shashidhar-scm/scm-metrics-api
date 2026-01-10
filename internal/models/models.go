@@ -25,6 +25,22 @@ type InputDevice struct {
 	Present    bool   `json:"present"`
 }
 
+type LinkState struct {
+	Interface       string `json:"interface,omitempty"`
+	Type            string `json:"type,omitempty"`
+	LinkUp          bool   `json:"link_up"`
+	SpeedMbps       int64  `json:"speed_mbps,omitempty"`
+	DuplexFull      bool   `json:"duplex_full"`
+	Autoneg         bool   `json:"autoneg"`
+	RxErrors        int64  `json:"rx_errors,omitempty"`
+	TxErrors        int64  `json:"tx_errors,omitempty"`
+	RxDropped       int64  `json:"rx_dropped,omitempty"`
+	TxDropped       int64  `json:"tx_dropped,omitempty"`
+	SignalDbm       int64  `json:"signal_dbm,omitempty"`
+	TxBitrateMbps   int64  `json:"tx_bitrate_mbps,omitempty"`
+	RxBitrateMbps   int64  `json:"rx_bitrate_mbps,omitempty"`
+}
+
 type CleanMetric struct {
 	ServerID           string
 	CPU                float64
@@ -61,6 +77,7 @@ type CleanMetric struct {
 	InputDevicesHealthy int64
 	InputDevicesMissing int64
 	InputDevices        []InputDevice
+	LinkState          *LinkState
 	Uptime             int64
 	City               string
 	CityName           string
@@ -103,9 +120,10 @@ type LatestMetric struct {
 	NetDailyTxBytes    int64     `json:"net_daily_tx_bytes"`
 	NetMonthlyRxBytes  int64     `json:"net_monthly_rx_bytes"`
 	NetMonthlyTxBytes  int64     `json:"net_monthly_tx_bytes"`
-	InputDevicesHealthy int64    `json:"input_devices_healthy"`
-	InputDevicesMissing int64    `json:"input_devices_missing"`
+	InputDevicesHealthy int64        `json:"input_devices_healthy"`
+	InputDevicesMissing int64        `json:"input_devices_missing"`
 	InputDevices        []InputDevice `json:"input_devices"`
+	LinkState           *LinkState   `json:"link_state,omitempty"`
 	Uptime             int64     `json:"uptime"`
 	City               string    `json:"city"`
 	CityName           string    `json:"city_name"`
@@ -144,11 +162,12 @@ type HistoryMetric struct {
 	NetBytesRecv       int64     `json:"net_bytes_recv"`
 	NetDailyRxBytes    int64     `json:"net_daily_rx_bytes"`
 	NetDailyTxBytes    int64     `json:"net_daily_tx_bytes"`
-	NetMonthlyRxBytes  int64     `json:"net_monthly_rx_bytes"`
-	NetMonthlyTxBytes  int64     `json:"net_monthly_tx_bytes"`
-	InputDevicesHealthy int64    `json:"input_devices_healthy"`
-	InputDevicesMissing int64    `json:"input_devices_missing"`
+	NetMonthlyRxBytes  int64        `json:"net_monthly_rx_bytes"`
+	NetMonthlyTxBytes  int64        `json:"net_monthly_tx_bytes"`
+	InputDevicesHealthy int64        `json:"input_devices_healthy"`
+	InputDevicesMissing int64        `json:"input_devices_missing"`
 	InputDevices        []InputDevice `json:"input_devices"`
+	LinkState           *LinkState   `json:"link_state,omitempty"`
 	Uptime             int64     `json:"uptime"`
 	City               string    `json:"city"`
 	CityName           string    `json:"city_name"`

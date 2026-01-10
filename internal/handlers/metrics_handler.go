@@ -99,6 +99,7 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	var inputDevices []models.InputDevice
 	var inputDevicesHealthy int64
 	var inputDevicesMissing int64
+	var linkState *models.LinkState
 	seenDisk := make(map[string]struct{})
 
 	headerLogged := false
@@ -322,6 +323,50 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 				inputDevicesMissing++
 			}
 			inputDevices = append(inputDevices, device)
+
+		case "kiosk_link":
+			if linkState == nil {
+				linkState = &models.LinkState{}
+			}
+			if iface := m.Tags["interface"]; iface != "" {
+				linkState.Interface = iface
+			}
+			if lt := m.Tags["type"]; lt != "" {
+				linkState.Type = lt
+			}
+			if v, ok := toInt64(m.Fields["link_up"]); ok {
+				linkState.LinkUp = v != 0
+			}
+			if v, ok := toInt64(m.Fields["speed_mbps"]); ok {
+				linkState.SpeedMbps = v
+			}
+			if v, ok := toInt64(m.Fields["duplex_full"]); ok {
+				linkState.DuplexFull = v != 0
+			}
+			if v, ok := toInt64(m.Fields["autoneg"]); ok {
+				linkState.Autoneg = v != 0
+			}
+			if v, ok := toInt64(m.Fields["rx_errors"]); ok {
+				linkState.RxErrors = v
+			}
+			if v, ok := toInt64(m.Fields["tx_errors"]); ok {
+				linkState.TxErrors = v
+			}
+			if v, ok := toInt64(m.Fields["rx_dropped"]); ok {
+				linkState.RxDropped = v
+			}
+			if v, ok := toInt64(m.Fields["tx_dropped"]); ok {
+				linkState.TxDropped = v
+			}
+			if v, ok := toInt64(m.Fields["signal_dbm"]); ok {
+				linkState.SignalDbm = v
+			}
+			if v, ok := toInt64(m.Fields["tx_bitrate_mbps"]); ok {
+				linkState.TxBitrateMbps = v
+			}
+			if v, ok := toInt64(m.Fields["rx_bitrate_mbps"]); ok {
+				linkState.RxBitrateMbps = v
+			}
 
 		case "kiosk_hotspot":
 			if hotspotCaptured {
@@ -602,12 +647,15 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		cm.InputDevices = nil
 	}
 
+	cm.LinkState = linkState
+
 	debugForServer := h.shouldLogForServer(cm.ServerID, payloadHost)
 
 	if h.debugLoggingOn && debugForServer {
-		log.Printf("ingest: parsed server_id=%s time=%s cpu=%.4f memory=%.4f temperature=%.2f chassis_temp=%.2f hotspot_temp=%.2f fan_rpm=%d volume_percent=%d muted=%t memory_total_bytes=%d memory_used_bytes=%d disk=%.4f disk_total_bytes=%d disk_used_bytes=%d disk_free_bytes=%d net_bytes_sent=%d net_bytes_recv=%d",
+		log.Printf("ingest: parsed server_id=%s time=%s cpu=%.4f memory=%.4f temperature=%.2f chassis_temp=%.2f hotspot_temp=%.2f fan_rpm=%d volume_percent=%d muted=%t memory_total_bytes=%d memory_used_bytes=%d disk=%.4f disk_total_bytes=%d disk_used_bytes=%d disk_free_bytes=%d net_bytes_sent=%d net_bytes_recv=%d link_state=%+v",
 			cm.ServerID, cm.Time.UTC().Format(time.RFC3339), cm.CPU, cm.Memory,
-			cm.Temperature, cm.ChassisTemperature, cm.HotspotTemperature, cm.FanRPM, cm.SoundVolumePercent, cm.SoundMuted, cm.MemoryTotalBytes, cm.MemoryUsedBytes, cm.Disk, cm.DiskTotalBytes, cm.DiskUsedBytes, cm.DiskFreeBytes, cm.NetBytesSent, cm.NetBytesRecv)
+			cm.Temperature, cm.ChassisTemperature, cm.HotspotTemperature, cm.FanRPM, cm.SoundVolumePercent, cm.SoundMuted, cm.MemoryTotalBytes, cm.MemoryUsedBytes, cm.Disk, cm.DiskTotalBytes, cm.DiskUsedBytes, cm.DiskFreeBytes, cm.NetBytesSent, cm.NetBytesRecv,
+			linkState)
 
 		if !sawTemperatureMetric {
 			log.Printf("ingest: temperature measurement missing for server_id=%s", cm.ServerID)
