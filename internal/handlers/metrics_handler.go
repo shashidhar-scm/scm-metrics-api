@@ -96,9 +96,21 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	var monthlyVnstatCaptured bool
 	var sawTemperatureMetric bool
 	var sawNetMetric bool
+	var inputDevices []models.InputDevice
+	var inputDevicesHealthy int64
+	var inputDevicesMissing int64
 	seenDisk := make(map[string]struct{})
 
 	headerLogged := false
+
+	firstNonEmpty := func(values ...string) string {
+		for _, v := range values {
+			if strings.TrimSpace(v) != "" {
+				return v
+			}
+		}
+		return ""
+	}
 
 	for _, m := range payload.Metrics {
 
@@ -282,6 +294,34 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+
+		case "kiosk_input":
+			device := models.InputDevice{
+				Source: m.Tags["source"],
+				Name:   m.Tags["name"],
+				Vendor: m.Tags["vendor"],
+				Product: m.Tags["product"],
+				Bus:    m.Tags["bus"],
+				Device: m.Tags["device"],
+				Target: m.Tags["target"],
+			}
+			device.Identifier = firstNonEmpty(m.Tags["id"], m.Tags["identifier"], device.Name, device.Target, device.Device)
+
+			present := false
+			if presentVal, ok := toInt64(m.Fields["present"]); ok {
+				present = presentVal != 0
+			} else if eventVal, ok := toInt64(m.Fields["event_present"]); ok {
+				present = eventVal != 0
+			} else if linkVal, ok := toInt64(m.Fields["link_present"]); ok {
+				present = linkVal != 0
+			}
+			device.Present = present
+			if present {
+				inputDevicesHealthy++
+			} else {
+				inputDevicesMissing++
+			}
+			inputDevices = append(inputDevices, device)
 
 		case "kiosk_hotspot":
 			if hotspotCaptured {
@@ -552,6 +592,14 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 			models.SeriesPoint{Time: cm.Time, ServerID: cm.ServerID, Measurement: "net", Field: "bytes_sent_total", ValueInt: &ns, TagsJSON: []byte(`{"aggregated":true}`)},
 			models.SeriesPoint{Time: cm.Time, ServerID: cm.ServerID, Measurement: "net", Field: "bytes_recv_total", ValueInt: &nr, TagsJSON: []byte(`{"aggregated":true}`)},
 		)
+	}
+
+	cm.InputDevicesHealthy = inputDevicesHealthy
+	cm.InputDevicesMissing = inputDevicesMissing
+	if len(inputDevices) > 0 {
+		cm.InputDevices = inputDevices
+	} else {
+		cm.InputDevices = nil
 	}
 
 	debugForServer := h.shouldLogForServer(cm.ServerID, payloadHost)

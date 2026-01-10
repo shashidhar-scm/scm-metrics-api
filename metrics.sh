@@ -80,14 +80,21 @@ ensure_audio_utils() {
 ensure_audio_utils
 
 # ------------------------------------------------------------
-# Ensure display tooling for xrandr
+# Ensure display + input tooling
 # ------------------------------------------------------------
 ensure_display_utils() {
-  if dpkg -s x11-xserver-utils >/dev/null 2>&1; then
-    echo "✔ x11-xserver-utils already installed"
+  local packages=()
+  if ! dpkg -s x11-xserver-utils >/dev/null 2>&1; then
+    packages+=("x11-xserver-utils")
+  fi
+  if ! dpkg -s usbutils >/dev/null 2>&1; then
+    packages+=("usbutils")
+  fi
+  if ((${#packages[@]})); then
+    echo "▶ Installing ${packages[*]} for display/input helpers..."
+    sudo apt install -y "${packages[@]}"
   else
-    echo "▶ Installing x11-xserver-utils (for xrandr)..."
-    sudo apt install -y x11-xserver-utils
+    echo "✔ Display/input tooling already installed"
   fi
 }
 
@@ -133,6 +140,7 @@ echo "▶️ Installing vnStat helper script..."
 sudo tee /usr/local/bin/vnstat_daily.sh >/dev/null <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+trap '' PIPE
 
 DEFAULT_IFACE="$(ip route | awk '/default/ {print $5; exit}')"
 IFACE="${1:-${DEFAULT_IFACE:-enp1s0}}"
@@ -543,6 +551,120 @@ EOF
 sudo chmod +x /usr/local/bin/display_status.sh
 
 # ------------------------------------------------------------
+# Helper script for input device health
+# ------------------------------------------------------------
+echo "▶️ Installing input device helper script..."
+sudo tee /usr/local/bin/input_devices.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v python3 >/dev/null 2>&1; then
+  exit 0
+fi
+
+python3 <<'PY'
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+
+records = []
+
+def sanitize(value: str) -> str:
+    if not value:
+        return ""
+    value = value.strip()
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", value)
+
+def emit_line(tags, fields):
+    tag_parts = []
+    for key, val in tags.items():
+        if not val:
+            continue
+        tag_parts.append("{}={}".format(key, val))
+    if not fields:
+        return
+    field_parts = []
+    for key, val in fields.items():
+        if isinstance(val, int):
+            field_parts.append("{}={}i".format(key, val))
+        else:
+            field_parts.append("{}={}".format(key, val))
+    if not field_parts:
+        return
+    line = "kiosk_input"
+    if tag_parts:
+        line += "," + ",".join(tag_parts)
+    line += " " + ",".join(field_parts)
+    print(line)
+
+def collect_usb():
+    if shutil.which("lsusb") is None:
+        return
+    try:
+        raw = subprocess.check_output(
+        ["lsusb"],
+        universal_newlines=True,
+        stderr=subprocess.STDOUT,
+    )
+    except Exception:
+        return
+    pattern = re.compile(r"Bus (\d+)\s+Device (\d+):\s+ID ([0-9A-Fa-f]{4}):([0-9A-Fa-f]{4})\s*(.*)")
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = pattern.match(line)
+        if not match:
+            continue
+        bus, device, vendor, product, name = match.groups()
+        tags = {
+            "source": "usb",
+            "bus": sanitize(bus),
+            "device": sanitize(device),
+            "vendor": sanitize(vendor.lower()),
+            "product": sanitize(product.lower()),
+            "name": sanitize(name) or "unknown",
+        }
+        records.append((tags, {"present": 1}))
+
+def collect_input_links():
+    base = pathlib.Path("/dev/input/by-id")
+    if not base.exists():
+        return
+    for entry in sorted(base.iterdir()):
+        if not entry.is_symlink():
+            continue
+        entry_path = str(entry)
+        try:
+            resolved = os.path.realpath(entry_path)
+            exists = os.path.exists(resolved)
+        except OSError:
+            resolved = ""
+            exists = False
+        tags = {
+            "source": "dev_input",
+            "id": sanitize(entry.name),
+            "target": sanitize(os.path.basename(resolved)) if resolved else "",
+        }
+        fields = {
+            "link_present": 1,
+            "event_present": 1 if exists else 0,
+        }
+        records.append((tags, fields))
+
+collect_usb()
+collect_input_links()
+
+for tags, fields in records:
+    emit_line(tags, fields)
+PY
+EOF
+sudo chmod +x /usr/local/bin/input_devices.sh
+
+# ------------------------------------------------------------
 # Ensure telegraf user can access ALSA devices
 # ------------------------------------------------------------
 if id telegraf >/dev/null 2>&1; then
@@ -632,6 +754,13 @@ EOF
 sudo tee "$CONF_DIR/inputs-display.conf" >/dev/null <<'EOF'
 [[inputs.exec]]
   commands = ["/usr/local/bin/display_status.sh"]
+  timeout = "5s"
+  data_format = "influx"
+EOF
+
+sudo tee "$CONF_DIR/inputs-input.conf" >/dev/null <<'EOF'
+[[inputs.exec]]
+  commands = ["/usr/local/bin/input_devices.sh"]
   timeout = "5s"
   data_format = "influx"
 EOF

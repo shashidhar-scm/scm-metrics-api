@@ -13,6 +13,18 @@ type Metric struct {
 	Timestamp float64                `json:"timestamp"`
 }
 
+type InputDevice struct {
+	Source     string `json:"source"`
+	Identifier string `json:"identifier"`
+	Name       string `json:"name,omitempty"`
+	Vendor     string `json:"vendor,omitempty"`
+	Product    string `json:"product,omitempty"`
+	Bus        string `json:"bus,omitempty"`
+	Device     string `json:"device,omitempty"`
+	Target     string `json:"target,omitempty"`
+	Present    bool   `json:"present"`
+}
+
 type CleanMetric struct {
 	ServerID           string
 	CPU                float64
@@ -46,6 +58,9 @@ type CleanMetric struct {
 	NetDailyTxBytes    int64
 	NetMonthlyRxBytes  int64
 	NetMonthlyTxBytes  int64
+	InputDevicesHealthy int64
+	InputDevicesMissing int64
+	InputDevices        []InputDevice
 	Uptime             int64
 	City               string
 	CityName           string
@@ -88,6 +103,9 @@ type LatestMetric struct {
 	NetDailyTxBytes    int64     `json:"net_daily_tx_bytes"`
 	NetMonthlyRxBytes  int64     `json:"net_monthly_rx_bytes"`
 	NetMonthlyTxBytes  int64     `json:"net_monthly_tx_bytes"`
+	InputDevicesHealthy int64    `json:"input_devices_healthy"`
+	InputDevicesMissing int64    `json:"input_devices_missing"`
+	InputDevices        []InputDevice `json:"input_devices"`
 	Uptime             int64     `json:"uptime"`
 	City               string    `json:"city"`
 	CityName           string    `json:"city_name"`
@@ -126,8 +144,11 @@ type HistoryMetric struct {
 	NetBytesRecv       int64     `json:"net_bytes_recv"`
 	NetDailyRxBytes    int64     `json:"net_daily_rx_bytes"`
 	NetDailyTxBytes    int64     `json:"net_daily_tx_bytes"`
-	NetMonthlyRxBytes  int64     `json.htmlon":"net_monthly_rx_bytes"`
+	NetMonthlyRxBytes  int64     `json:"net_monthly_rx_bytes"`
 	NetMonthlyTxBytes  int64     `json:"net_monthly_tx_bytes"`
+	InputDevicesHealthy int64    `json:"input_devices_healthy"`
+	InputDevicesMissing int64    `json:"input_devices_missing"`
+	InputDevices        []InputDevice `json:"input_devices"`
 	Uptime             int64     `json:"uptime"`
 	City               string    `json:"city"`
 	CityName           string    `json:"city_name"`
