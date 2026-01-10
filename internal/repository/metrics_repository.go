@@ -35,10 +35,19 @@ func (r *MetricsRepository) SaveMetric(ctx context.Context, m models.CleanMetric
 		linkStateValue = string(linkStateJSON)
 	}
 
+	var processStatusesValue interface{}
+	if len(m.ProcessStatuses) > 0 {
+		processStatusesJSON, err := json.Marshal(m.ProcessStatuses)
+		if err != nil {
+			return err
+		}
+		processStatusesValue = string(processStatusesJSON)
+	}
+
 	_, err = r.db.ExecContext(
 		ctx,
-		`INSERT INTO server_metrics(time, server_id, cpu, memory, temperature, chassis_temperature, hotspot_temperature, power_online, battery_present, battery_charge_pct, battery_voltage_mv, battery_current_ma, sound_volume_percent, sound_muted, display_connected, display_width, display_height, display_refresh_hz, display_primary, display_dpms_enabled, fan_rpm, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes, net_bytes_sent, net_bytes_recv, net_daily_rx_bytes, net_daily_tx_bytes, net_monthly_rx_bytes, net_monthly_tx_bytes, input_devices_healthy, input_devices_missing, input_devices, link_state, uptime, city, city_name, region, region_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42)
+		`INSERT INTO server_metrics(time, server_id, cpu, memory, temperature, chassis_temperature, hotspot_temperature, power_online, battery_present, battery_charge_pct, battery_voltage_mv, battery_current_ma, sound_volume_percent, sound_muted, display_connected, display_width, display_height, display_refresh_hz, display_primary, display_dpms_enabled, fan_rpm, memory_total_bytes, memory_used_bytes, disk, disk_total_bytes, disk_used_bytes, disk_free_bytes, net_bytes_sent, net_bytes_recv, net_daily_rx_bytes, net_daily_tx_bytes, net_monthly_rx_bytes, net_monthly_tx_bytes, input_devices_healthy, input_devices_missing, input_devices, link_state, process_statuses, uptime, city, city_name, region, region_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43)
          ON CONFLICT (server_id, time) DO UPDATE
          SET cpu = EXCLUDED.cpu,
              memory = EXCLUDED.memory,
@@ -75,12 +84,13 @@ func (r *MetricsRepository) SaveMetric(ctx context.Context, m models.CleanMetric
              input_devices_missing = EXCLUDED.input_devices_missing,
              input_devices = EXCLUDED.input_devices,
              link_state = EXCLUDED.link_state,
+             process_statuses = EXCLUDED.process_statuses,
              uptime = EXCLUDED.uptime,
              city = EXCLUDED.city,
              city_name = EXCLUDED.city_name,
              region = EXCLUDED.region,
              region_name = EXCLUDED.region_name`,
-		m.Time, m.ServerID, m.CPU, m.Memory, m.Temperature, m.ChassisTemperature, m.HotspotTemperature, m.PowerOnline, m.BatteryPresent, m.BatteryChargePct, m.BatteryVoltageMV, m.BatteryCurrentMA, m.SoundVolumePercent, m.SoundMuted, m.DisplayConnected, m.DisplayWidth, m.DisplayHeight, m.DisplayRefreshHz, m.DisplayPrimary, m.DisplayDpmsEnabled, m.FanRPM, m.MemoryTotalBytes, m.MemoryUsedBytes, m.Disk, m.DiskTotalBytes, m.DiskUsedBytes, m.DiskFreeBytes, m.NetBytesSent, m.NetBytesRecv, m.NetDailyRxBytes, m.NetDailyTxBytes, m.NetMonthlyRxBytes, m.NetMonthlyTxBytes, m.InputDevicesHealthy, m.InputDevicesMissing, devicesJSON, linkStateValue, m.Uptime, m.City, m.CityName, m.Region, m.RegionName,
+		m.Time, m.ServerID, m.CPU, m.Memory, m.Temperature, m.ChassisTemperature, m.HotspotTemperature, m.PowerOnline, m.BatteryPresent, m.BatteryChargePct, m.BatteryVoltageMV, m.BatteryCurrentMA, m.SoundVolumePercent, m.SoundMuted, m.DisplayConnected, m.DisplayWidth, m.DisplayHeight, m.DisplayRefreshHz, m.DisplayPrimary, m.DisplayDpmsEnabled, m.FanRPM, m.MemoryTotalBytes, m.MemoryUsedBytes, m.Disk, m.DiskTotalBytes, m.DiskUsedBytes, m.DiskFreeBytes, m.NetBytesSent, m.NetBytesRecv, m.NetDailyRxBytes, m.NetDailyTxBytes, m.NetMonthlyRxBytes, m.NetMonthlyTxBytes, m.InputDevicesHealthy, m.InputDevicesMissing, devicesJSON, linkStateValue, processStatusesValue, m.Uptime, m.City, m.CityName, m.Region, m.RegionName,
 	)
 	return err
 }
@@ -369,7 +379,7 @@ func (r *MetricsRepository) LatestMetrics(ctx context.Context, limit, offset int
             net_bytes_sent, net_bytes_recv,
             net_daily_rx_bytes, net_daily_tx_bytes,
             net_monthly_rx_bytes, net_monthly_tx_bytes,
-            input_devices_healthy, input_devices_missing, input_devices, link_state,
+            input_devices_healthy, input_devices_missing, input_devices, link_state, process_statuses,
             uptime, city, city_name, region, region_name
         FROM server_metrics
         ORDER BY server_id, time DESC
@@ -384,6 +394,7 @@ func (r *MetricsRepository) LatestMetrics(ctx context.Context, limit, offset int
 		var m models.LatestMetric
 		var devicesJSON []byte
 		var linkStateJSON []byte
+		var processStatusesJSON []byte
 		if err := rows.Scan(
 			&m.ServerID,
 			&m.Time,
@@ -422,6 +433,7 @@ func (r *MetricsRepository) LatestMetrics(ctx context.Context, limit, offset int
 			&m.InputDevicesMissing,
 			&devicesJSON,
 			&linkStateJSON,
+			&processStatusesJSON,
 			&m.Uptime,
 			&m.City,
 			&m.CityName,
@@ -438,6 +450,12 @@ func (r *MetricsRepository) LatestMetrics(ctx context.Context, limit, offset int
 			var s models.LinkState
 			if err := json.Unmarshal(linkStateJSON, &s); err == nil {
 				result[len(result)-1].LinkState = &s
+			}
+		}
+		if len(processStatusesJSON) > 0 {
+			var statuses []models.ProcessStatus
+			if err := json.Unmarshal(processStatusesJSON, &statuses); err == nil {
+				result[len(result)-1].ProcessStatuses = statuses
 			}
 		}
 	}
@@ -466,7 +484,7 @@ func (r *MetricsRepository) HistoryMetrics(ctx context.Context, serverID, rng st
                net_bytes_sent, net_bytes_recv,
                net_daily_rx_bytes, net_daily_tx_bytes,
                net_monthly_rx_bytes, net_monthly_tx_bytes,
-               input_devices_healthy, input_devices_missing, input_devices, link_state,
+               input_devices_healthy, input_devices_missing, input_devices, link_state, process_statuses,
                uptime, city, city_name, region, region_name
         FROM server_metrics
         WHERE server_id = $1 AND time > now() - $2::interval
@@ -482,6 +500,7 @@ func (r *MetricsRepository) HistoryMetrics(ctx context.Context, serverID, rng st
 		var m models.HistoryMetric
 		var devicesJSON []byte
 		var linkStateJSON []byte
+		var processStatusesJSON []byte
 		if err := rows.Scan(
 			&m.Time,
 			&m.CPU,
@@ -519,6 +538,7 @@ func (r *MetricsRepository) HistoryMetrics(ctx context.Context, serverID, rng st
 			&m.InputDevicesMissing,
 			&devicesJSON,
 			&linkStateJSON,
+			&processStatusesJSON,
 			&m.Uptime,
 			&m.City,
 			&m.CityName,
@@ -534,6 +554,12 @@ func (r *MetricsRepository) HistoryMetrics(ctx context.Context, serverID, rng st
 			var s models.LinkState
 			if err := json.Unmarshal(linkStateJSON, &s); err == nil {
 				m.LinkState = &s
+			}
+		}
+		if len(processStatusesJSON) > 0 {
+			var statuses []models.ProcessStatus
+			if err := json.Unmarshal(processStatusesJSON, &statuses); err == nil {
+				m.ProcessStatuses = statuses
 			}
 		}
 		result = append(result, m)

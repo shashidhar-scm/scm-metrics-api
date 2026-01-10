@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -100,6 +101,7 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	var inputDevicesHealthy int64
 	var inputDevicesMissing int64
 	var linkState *models.LinkState
+	processStatusMap := make(map[string]models.ProcessStatus)
 	seenDisk := make(map[string]struct{})
 
 	headerLogged := false
@@ -367,6 +369,21 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 			if v, ok := toInt64(m.Fields["rx_bitrate_mbps"]); ok {
 				linkState.RxBitrateMbps = v
 			}
+
+		case "kiosk_service":
+			name := strings.TrimSpace(m.Tags["name"])
+			if name == "" {
+				continue
+			}
+			status := processStatusMap[name]
+			status.Name = name
+			if v, ok := toInt64(m.Fields["running"]); ok {
+				status.Running = v != 0
+			}
+			if v, ok := toInt64(m.Fields["process_count"]); ok {
+				status.ProcessCount = v
+			}
+			processStatusMap[name] = status
 
 		case "kiosk_hotspot":
 			if hotspotCaptured {
@@ -648,6 +665,16 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cm.LinkState = linkState
+	if len(processStatusMap) > 0 {
+		names := make([]string, 0, len(processStatusMap))
+		for name := range processStatusMap {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			cm.ProcessStatuses = append(cm.ProcessStatuses, processStatusMap[name])
+		}
+	}
 
 	debugForServer := h.shouldLogForServer(cm.ServerID, payloadHost)
 

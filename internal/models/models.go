@@ -41,6 +41,12 @@ type LinkState struct {
 	RxBitrateMbps   int64  `json:"rx_bitrate_mbps,omitempty"`
 }
 
+type ProcessStatus struct {
+	Name         string `json:"name"`
+	Running      bool   `json:"running"`
+	ProcessCount int64  `json:"process_count,omitempty"`
+}
+
 type CleanMetric struct {
 	ServerID           string
 	CPU                float64
@@ -78,6 +84,7 @@ type CleanMetric struct {
 	InputDevicesMissing int64
 	InputDevices        []InputDevice
 	LinkState          *LinkState
+	ProcessStatuses    []ProcessStatus
 	Uptime             int64
 	City               string
 	CityName           string
@@ -124,6 +131,7 @@ type LatestMetric struct {
 	InputDevicesMissing int64        `json:"input_devices_missing"`
 	InputDevices        []InputDevice `json:"input_devices"`
 	LinkState           *LinkState   `json:"link_state,omitempty"`
+	ProcessStatuses     []ProcessStatus `json:"process_statuses,omitempty"`
 	Uptime             int64     `json:"uptime"`
 	City               string    `json:"city"`
 	CityName           string    `json:"city_name"`
@@ -168,6 +176,7 @@ type HistoryMetric struct {
 	InputDevicesMissing int64        `json:"input_devices_missing"`
 	InputDevices        []InputDevice `json:"input_devices"`
 	LinkState           *LinkState   `json:"link_state,omitempty"`
+	ProcessStatuses     []ProcessStatus `json:"process_statuses,omitempty"`
 	Uptime             int64     `json:"uptime"`
 	City               string    `json:"city"`
 	CityName           string    `json:"city_name"`

@@ -775,6 +775,36 @@ EOF
 sudo chmod +x /usr/local/bin/network_link.sh
 
 # ------------------------------------------------------------
+# Helper script for process watchdog
+# ------------------------------------------------------------
+echo "▶️ Installing process watchdog helper script..."
+sudo tee /usr/local/bin/process_watchdog.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+declare -A PATTERNS=(
+  ["kiosk"]="\/opt\/scmkiosk\/cmd\/cmd"
+  ["chisel"]="\/opt\/scmkiosk\/rtty\/chisel"
+  ["rtty"]="\/opt\/scmkiosk\/rtty\/rtty"
+  ["ui"]="\/opt\/scmkiosk\/ui\/release\/KioskUI-linux-x64"
+  ["syncer"]="\/opt\/scmkiosk\/syncer\/syncer"
+)
+
+ORDER=("kiosk" "chisel" "rtty" "ui" "syncer")
+
+for name in "${ORDER[@]}"; do
+  pattern="${PATTERNS[$name]}"
+  count=$(pgrep -fc -- "$pattern" || true)
+  running=0
+  if [[ "${count:-0}" -gt 0 ]]; then
+    running=1
+  fi
+  printf 'kiosk_service,name=%s running=%si,process_count=%si\n' "$name" "$running" "${count:-0}"
+done
+EOF
+sudo chmod +x /usr/local/bin/process_watchdog.sh
+
+# ------------------------------------------------------------
 # Ensure telegraf user can access ALSA devices
 # ------------------------------------------------------------
 if id telegraf >/dev/null 2>&1; then
@@ -878,6 +908,13 @@ EOF
 sudo tee "$CONF_DIR/inputs-link.conf" >/dev/null <<'EOF'
 [[inputs.exec]]
   commands = ["/usr/local/bin/network_link.sh"]
+  timeout = "5s"
+  data_format = "influx"
+EOF
+
+sudo tee "$CONF_DIR/inputs-watchdog.conf" >/dev/null <<'EOF'
+[[inputs.exec]]
+  commands = ["/usr/local/bin/process_watchdog.sh"]
   timeout = "5s"
   data_format = "influx"
 EOF
