@@ -11,7 +11,7 @@ emit_daily() {
   local json="$1"
   local fields
   fields="$(jq -r '
-    .interfaces[0].traffic.days
+    (.interfaces[0].traffic.days // .interfaces[0].traffic.day // [])
     | sort_by(.date.year, .date.month, .date.day)
     | last?
     | "\(.date.year) \(.date.month) \(.date.day) \(.rx // 0) \(.tx // 0)"
@@ -22,13 +22,13 @@ emit_daily() {
     return
   fi
 
-  local year month day rx_kib tx_kib
-  read -r year month day rx_kib tx_kib <<<"$fields"
+  local year month day rx_bytes tx_bytes
+  read -r year month day rx_bytes tx_bytes <<<"$fields"
   local day_fmt
   day_fmt="$(printf "%04d-%02d-%02d" "$year" "$month" "$day")"
   local rx_mib tx_mib
-  rx_mib="$(awk -v v="$rx_kib" 'BEGIN {printf "%.3f", v / 1024}')"
-  tx_mib="$(awk -v v="$tx_kib" 'BEGIN {printf "%.3f", v / 1024}')"
+  rx_mib="$(awk -v v="$rx_bytes" 'BEGIN {printf "%.3f", v / (1024 * 1024)}')"
+  tx_mib="$(awk -v v="$tx_bytes" 'BEGIN {printf "%.3f", v / (1024 * 1024)}')"
   printf 'vnstat_daily,interface=%s,day=%s rx_mib=%s,tx_mib=%s\n' "$IFACE" "$day_fmt" "$rx_mib" "$tx_mib"
 }
 
@@ -36,7 +36,7 @@ emit_monthly() {
   local json="$1"
   local fields
   fields="$(jq -r '
-    .interfaces[0].traffic.months
+    (.interfaces[0].traffic.months // .interfaces[0].traffic.month // [])
     | sort_by(.date.year, .date.month)
     | last?
     | "\(.date.year) \(.date.month) \(.rx // 0) \(.tx // 0)"
@@ -47,13 +47,13 @@ emit_monthly() {
     return
   fi
 
-  local year month rx_kib tx_kib
-  read -r year month rx_kib tx_kib <<<"$fields"
+  local year month rx_bytes tx_bytes
+  read -r year month rx_bytes tx_bytes <<<"$fields"
   local month_fmt
   month_fmt="$(printf "%04d-%02d" "$year" "$month")"
   local rx_mib tx_mib
-  rx_mib="$(awk -v v="$rx_kib" 'BEGIN {printf "%.3f", v / 1024}')"
-  tx_mib="$(awk -v v="$tx_kib" 'BEGIN {printf "%.3f", v / 1024}')"
+  rx_mib="$(awk -v v="$rx_bytes" 'BEGIN {printf "%.3f", v / (1024 * 1024)}')"
+  tx_mib="$(awk -v v="$tx_bytes" 'BEGIN {printf "%.3f", v / (1024 * 1024)}')"
   printf 'vnstat_monthly,interface=%s,month=%s rx_mib=%s,tx_mib=%s\n' "$IFACE" "$month_fmt" "$rx_mib" "$tx_mib"
 }
 

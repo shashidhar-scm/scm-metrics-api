@@ -3,12 +3,21 @@ set -euo pipefail
 
 CHANNEL="${1:-Master}"
 
+if ! command -v amixer >/dev/null 2>&1; then
+  printf 'kiosk_volume,channel=%s level_percent=0i,muted=1i\n' "$CHANNEL"
+  exit 0
+fi
+
+set +o pipefail
 LINE="$(amixer get "$CHANNEL" 2>/dev/null | awk -F'[][]' '/Mono: Playback|Front Left: Playback|Front Right: Playback/ {printf "%s\t%s\n", $2, $6; exit}')"
-if [[ -n "$LINE" ]]; then
-  IFS=$'\t' read -r RAW STATE <<<"$LINE"
-else
+exit_code=$?
+set -o pipefail
+
+if [[ $exit_code -ne 0 || -z "${LINE:-}" ]]; then
   RAW="0%"
-  STATE=""
+  STATE="off"
+else
+  IFS=$'\t' read -r RAW STATE <<<"$LINE"
 fi
 VALUE="${RAW%%%}"
 

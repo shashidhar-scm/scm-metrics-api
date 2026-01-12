@@ -18,6 +18,29 @@ OS_VERSION="$(lsb_release -rs 2>/dev/null || echo unknown)"
 echo "▶️ Detected Ubuntu version: $OS_VERSION"
 echo "▶️ Primary network interface: $NET_IFACE"
 
+APT_UPDATED=0
+apt_update_once() {
+  if [[ $APT_UPDATED -eq 0 ]]; then
+    echo "▶ Updating apt package index..."
+    sudo apt-get update
+    APT_UPDATED=1
+  fi
+}
+
+install_missing_packages() {
+  local missing=()
+  for pkg in "$@"; do
+    if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+  if ((${#missing[@]})); then
+    apt_update_once
+    echo "▶ Installing ${missing[*]}..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
+  fi
+}
+
 # ------------------------------------------------------------
 # Install Telegraf (safe for 16 / 18 / 20 / 22)
 # ------------------------------------------------------------
@@ -41,8 +64,8 @@ install_telegraf() {
       echo "deb [signed-by=/usr/share/keyrings/influxdata-archive.gpg] https://repos.influxdata.com/ubuntu jammy stable" \
         | sudo tee /etc/apt/sources.list.d/influxdata.list
 
-      sudo apt update
-      sudo apt install -y telegraf
+      apt_update_once
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y telegraf
       ;;
     *)
       echo "❌ Unsupported OS"
@@ -60,8 +83,7 @@ install_sensors_prereqs() {
   if dpkg -s lm-sensors >/dev/null 2>&1; then
     echo "✔ lm-sensors already installed"
   else
-    echo "▶ Installing lm-sensors..."
-    sudo apt install -y lm-sensors
+    install_missing_packages lm-sensors
   fi
 
   echo "▶ Running sensors-detect (auto)..."
@@ -77,8 +99,7 @@ ensure_audio_utils() {
   if dpkg -s alsa-utils >/dev/null 2>&1; then
     echo "✔ alsa-utils already installed"
   else
-    echo "▶ Installing alsa-utils (for amixer)..."
-    sudo apt install -y alsa-utils
+    install_missing_packages alsa-utils
   fi
 }
 
@@ -94,12 +115,6 @@ ensure_display_utils() {
   fi
   if ! dpkg -s usbutils >/dev/null 2>&1; then
     packages+=("usbutils")
-  fi
-  if ! dpkg -s ethtool >/dev/null 2>&1; then
-    packages+=("ethtool")
-  fi
-  if ! dpkg -s iw >/dev/null 2>&1; then
-    packages+=("iw")
   fi
   if ((${#packages[@]})); then
     echo "▶ Installing ${packages[*]} for display/input helpers..."
@@ -119,7 +134,7 @@ ensure_envsubst() {
     return
   fi
   echo "▶ Installing gettext-base for envsubst..."
-  sudo apt install -y gettext-base
+  install_missing_packages gettext-base
 }
 
 ensure_envsubst
@@ -176,8 +191,7 @@ install_vnstat_stack() {
   fi
 
   if ((${#packages[@]})); then
-    echo "▶ Installing ${packages[*]}..."
-    sudo apt install -y "${packages[@]}"
+    install_missing_packages "${packages[@]}"
   else
     echo "✔ vnStat + jq already installed"
   fi

@@ -172,22 +172,21 @@ func (h *MetricsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 				isPrimary = true
 			}
 
-			rank := 0
+			isConnected := false
 			if connectedVal, ok := toInt64(m.Fields["connected"]); ok && connectedVal != 0 {
-				rank = 1
-				if isPrimary {
-					rank = 3
-				}
-			} else if isPrimary {
-				rank = 2
+				isConnected = true
+			}
+
+			rank := 0
+			if isConnected {
+				rank += 2
+			}
+			if isPrimary {
+				rank++
 			}
 
 			if !displayCaptured || rank > displayBestRank {
-				if connectedVal, ok := toInt64(m.Fields["connected"]); ok {
-					cm.DisplayConnected = connectedVal != 0
-				} else {
-					cm.DisplayConnected = false
-				}
+				cm.DisplayConnected = isConnected
 				if widthVal, ok := toInt64(m.Fields["width"]); ok {
 					cm.DisplayWidth = widthVal
 				} else {

@@ -33,7 +33,7 @@ installer-deb: installer-clean
 	cp $(INSTALLER_DIR)/DEBIAN/postinst $(DEBIAN_ROOT)/
 	cp $(INSTALLER_DIR)/DEBIAN/prerm $(DEBIAN_ROOT)/
 	chmod 0755 $(DEBIAN_ROOT)/postinst $(DEBIAN_ROOT)/prerm
-	dpkg-deb --build $(PKG_DIR) $(DEB_FILE)
+	dpkg-deb -Zgzip -z9 --build $(PKG_DIR) $(DEB_FILE)
 	@echo "Created $(DEB_FILE)"
 
 installer-deb-docker:

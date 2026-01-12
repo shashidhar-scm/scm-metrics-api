@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -308,6 +309,11 @@ func (r *MetricsRepository) ServerStatus(ctx context.Context, city, region strin
 		hasMore = true
 		out = out[:limit]
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a := strings.ToLower(strings.TrimSpace(out[i].ServerID))
+		b := strings.ToLower(strings.TrimSpace(out[j].ServerID))
+		return a < b
+	})
 	return out, hasMore, nil
 }
 
